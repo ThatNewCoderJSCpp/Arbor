@@ -1,0 +1,209 @@
+<!grove>
+<grove>
+    <head>
+        <title>Arbor</title>
+        <style src="arbor.bark"></style>
+        <script lang="walnut" src="arbor.wal"></script>
+    </head>
+    <body id="app" title="Arbor">
+        <page id="home" current>
+            <row class="topbar">
+                <text class="brand">Arbor</text>
+                <text class="tagline">2D, 3D and complex graphing</text>
+                <div class="grow"></div>
+                <button id="home-library" class="ghost">Library</button>
+                <button id="home-open-file" class="ghost">Open file&#8230;</button>
+                <button id="home-settings" class="ghost">Settings</button>
+            </row>
+            <column id="home-scroll" class="scroll">
+                <column id="home-inner" class="home-inner">
+                    <row id="recovery" class="banner hidden">
+                        <p id="recovery-text" class="grow">An unsaved graph was left open last time.</p>
+                        <button id="recovery-open">Open it</button>
+                        <button id="recovery-drop" class="ghost">Discard</button>
+                    </row>
+                    <column id="saved-block" class="hidden">
+                        <row class="saved-head">
+                            <h2 class="section-title grow">Your graphs</h2>
+                            <text id="saved-count" class="muted"></text>
+                        </row>
+                        <row id="saved-cards" class="cards"></row>
+                    </column>
+                    <h2 class="section-title">New graph</h2>
+                    <row id="section-tabs" class="tabs"></row>
+                    <p id="section-about" class="muted"></p>
+                    <row id="kind-cards" class="cards"></row>
+                    <h3 class="section-title small">Examples</h3>
+                    <row id="example-cards" class="cards"></row>
+                </column>
+            </column>
+        </page>
+
+        <page id="graph">
+            <row class="topbar graph-bar">
+                <button id="go-home" class="ghost" title="Back to all graphs">&#8592; Graphs</button>
+                <input_string id="graph-title" class="title-input" placeholder="Untitled" />
+                <text id="save-state" class="muted"></text>
+                <div class="grow"></div>
+                <button id="undo" class="ghost icon" title="Undo">&#8630;</button>
+                <button id="redo" class="ghost icon" title="Redo">&#8631;</button>
+                <input_select id="quick-type" class="quick-type" title="Number type for values and precise plotting">
+                    <option value="short-float">short float</option>
+                </input_select>
+                <button id="graph-library" class="ghost">Library</button>
+                <button id="save" class="primary">Save</button>
+                <button id="graph-settings" class="ghost">Settings</button>
+            </row>
+            <row id="workspace">
+                <column id="side">
+                    <row class="side-tools">
+                        <input_select id="add-kind" class="grow" placeholder="+ Add to graph"></input_select>
+                    </row>
+                    <column id="busy-bar" class="banner busy-bar hidden">
+                        <p id="busy-text" class="busy-text">Still drawing&#8230;</p>
+                        <row class="busy-row">
+                            <button id="busy-stop" class="small">Stop drawing</button>
+                            <button id="busy-quit" class="ghost small danger">Quit Arbor</button>
+                        </row>
+                    </column>
+                    <column id="wanted" class="banner hidden"></column>
+                    <column id="items" class="scroll"></column>
+                </column>
+                <column id="stage">
+                    <row id="view-bar">
+                        <input_bool id="v-grid" checked>Grid</input_bool>
+                        <input_bool id="v-axes" checked>Axes</input_bool>
+                        <input_bool id="v-labels" checked>Labels</input_bool>
+                        <input_bool id="v-degrees">Degrees</input_bool>
+                        <input_bool id="v-symbols" title="Show readouts as formulas (T(t), N(t), κ(t), f′(x), …)" checked>Symbols</input_bool>
+                        <input_bool id="v-values" title="Show readouts as numbers at the chosen point" checked>Values</input_bool>
+                        <input_bool id="v-perspective" class="only-3d" checked>Perspective</input_bool>
+                        <input_bool id="v-equal" class="only-2d" checked>Equal axes</input_bool>
+                        <div class="grow"></div>
+                        <button id="v-top" class="ghost small only-3d">Top</button>
+                        <button id="v-front" class="ghost small only-3d">Front</button>
+                        <button id="v-zoom-out" class="ghost small icon" title="Zoom out">&#8722;</button>
+                        <button id="v-zoom-in" class="ghost small icon" title="Zoom in">+</button>
+                        <button id="v-bounds" class="ghost small" title="Choose how much of the graph is drawn">Bounds</button>
+                        <button id="v-reset" class="ghost small" title="Reset view">Reset</button>
+                        <button id="v-export" class="ghost small" title="Export a PNG picture">Export</button>
+                    </row>
+                    <row id="bounds-bar" class="bounds-bar hidden"></row>
+                    <canvas id="plot" />
+                    <row id="statusbar">
+                        <p id="coords" class="grow"></p>
+                        <text id="info" class="muted"></text>
+                    </row>
+                </column>
+            </row>
+        </page>
+
+        <page id="library">
+            <row class="topbar">
+                <button id="library-back" class="ghost">&#8592; Back</button>
+                <text class="brand small">Library</text>
+                <input_string id="library-search" class="library-search" placeholder="Search functions, constants and variables" />
+                <div class="grow"></div>
+                <text id="library-count" class="muted"></text>
+            </row>
+            <column class="scroll">
+                <column class="library-inner">
+                    <p class="muted">Everything Arbor understands in an equation. Functions take their inputs in parentheses; a word that isn't a function or a constant (alpha, k, speed) is a variable you can give a slider. Click a name to copy it into the equation you were last editing.</p>
+                    <row id="library-tabs" class="tabs wrap"></row>
+                    <column id="library-list" class="library-list"></column>
+                </column>
+            </column>
+        </page>
+
+        <page id="settings">
+            <row class="topbar">
+                <button id="settings-back" class="ghost">&#8592; Back</button>
+                <text class="brand small">Settings</text>
+                <div class="grow"></div>
+            </row>
+            <column class="scroll">
+                <column class="settings-inner">
+                    <column class="panel">
+                        <h3>Appearance</h3>
+                        <row class="choices">
+                            <input_radio name="theme" value="dark">Dark</input_radio>
+                            <input_radio name="theme" value="light">Light</input_radio>
+                            <input_radio name="theme" value="custom">Custom colors</input_radio>
+                        </row>
+                        <row id="custom-colors" class="choices wrap">
+                            <column class="color-field"><label>Background</label><input_color id="c-bg" value="#1e1e2e" /></column>
+                            <column class="color-field"><label>Panels</label><input_color id="c-panel" value="#181825" /></column>
+                            <column class="color-field"><label>Text</label><input_color id="c-text" value="#cdd6f4" /></column>
+                            <column class="color-field"><label>Accent</label><input_color id="c-accent" value="#89b4fa" /></column>
+                        </row>
+                        <row class="field-row">
+                            <label class="field-label">Interface size</label>
+                            <input_select id="ui-scale">
+                                <option value="0.9">90%</option>
+                                <option value="1">100%</option>
+                                <option value="1.1">110%</option>
+                                <option value="1.25">125%</option>
+                                <option value="1.5">150%</option>
+                                <option value="1.75">175%</option>
+                            </input_select>
+                        </row>
+                    </column>
+
+                    <column class="panel">
+                        <h3>Numbers</h3>
+                        <p class="muted">Curves, surfaces and color maps are always drawn with the CPU's double first, so the graph appears right away. The type picked here is used for every value Arbor shows you (readouts, curvature, Jacobians, slopes), and optionally for a second, precise drawing pass.</p>
+                        <column id="number-types" class="radio-list"></column>
+                        <input_bool id="precise-plot" appearance="switch">Draw again with this type once the fast pass is done (slower, most of all for the long double types)</input_bool>
+                        <row class="field-row">
+                            <button id="run-benchmark" class="ghost small">Measure speed on this computer</button>
+                            <text id="benchmark-note" class="muted"></text>
+                        </row>
+                    </column>
+
+                    <column class="panel">
+                        <h3>Graphs</h3>
+                        <label class="field-label">When you close a graph with unsaved changes</label>
+                        <row class="choices wrap">
+                            <input_radio name="on-close" value="ask">Ask whether to save</input_radio>
+                            <input_radio name="on-close" value="save">Save it</input_radio>
+                            <input_radio name="on-close" value="discard">Throw the changes away</input_radio>
+                        </row>
+                        <label class="field-label">Detail</label>
+                        <row class="choices wrap">
+                            <input_radio name="quality" value="1">Fast</input_radio>
+                            <input_radio name="quality" value="2">Balanced</input_radio>
+                            <input_radio name="quality" value="3">Fine</input_radio>
+                        </row>
+                        <input_bool id="smooth-3d" appearance="switch">Smooth (anti-aliased) 3D when the view stops moving</input_bool>
+                    </column>
+
+                    <column class="panel">
+                        <h3>Drawing bounds</h3>
+                        <p class="muted">The starting bounds for new graphs. Each graph can change its own with the Bounds button above the picture. In 2D, leave a box empty to draw without a limit on that side.</p>
+                        <row class="bounds-row">
+                            <text class="muted">2D: x from</text>
+                            <input_string id="d-x-min" class="bound-input" placeholder="none" />
+                            <text class="muted">to</text>
+                            <input_string id="d-x-max" class="bound-input" placeholder="none" />
+                            <text class="muted">y from</text>
+                            <input_string id="d-y-min" class="bound-input" placeholder="none" />
+                            <text class="muted">to</text>
+                            <input_string id="d-y-max" class="bound-input" placeholder="none" />
+                        </row>
+                        <row class="bounds-row">
+                            <text class="muted">3D: box half-width</text>
+                            <input_string id="d-box" class="bound-input" placeholder="5" />
+                            <text class="muted">z half-height</text>
+                            <input_string id="d-zbox" class="bound-input" placeholder="auto" />
+                        </row>
+                    </column>
+
+                    <column class="panel">
+                        <h3>About</h3>
+                        <p id="about" class="muted"></p>
+                    </column>
+                </column>
+            </column>
+        </page>
+    </body>
+</grove>

@@ -1,0 +1,1689 @@
+import module.grove
+import module.strings
+import module.io
+
+string: current_section = "2d";
+string: last_revision = "";
+string: last_items = "";
+string: last_page = "home";
+bool: building = false;
+string: last_eq_id = "";
+string: lib_category = "All";
+bool: stop_asked = false;
+
+function call(const string&: name, const string&: arg) -> string;
+function el(const string&: tag, const string&: cls, const string&: label) -> grove::Element;
+function clear(grove::Element&: e) -> void;
+function show(const string&: id, bool: on) -> void;
+function tab2(const string&: a, const string&: b) -> string;
+function tab3(const string&: a, const string&: b, const string&: c) -> string;
+function apply_theme() -> void;
+function show_home() -> void;
+function build_tabs() -> void;
+function build_kinds() -> void;
+function build_saved() -> void;
+function open_saved(const string&: id) -> void;
+function leave_graph(function() -> void: next) -> void;
+function enter_graph() -> void;
+function build_add_menu() -> void;
+function sync_view() -> void;
+function build_items() -> void;
+function make_card(const string&: id) -> grove::Element;
+function update_slider(const string&: id, const string&: line) -> void;
+function update_param(const string&: id, const string&: line) -> void;
+function update_status(const string&: id) -> void;
+function update_wanted() -> void;
+function update_save_state() -> void;
+function refresh() -> void;
+function show_settings() -> void;
+function build_number_types() -> void;
+function setting_from_radio(const string&: group) -> void;
+function back_from_settings() -> void;
+function view_toggle(const string&: id, const string&: cmd) -> void;
+function view_button(const string&: id, const string&: cmd) -> void;
+function setting_toggle(const string&: id, const string&: key) -> void;
+function color_setting(const string&: id, const string&: key) -> void;
+function build_quick_types() -> void;
+function toggle_swatches(const string&: id) -> void;
+function make_domain(const string&: id, const string&: line) -> grove::Element;
+function build_bounds_bar() -> void;
+function show_library() -> void;
+function build_library() -> void;
+function insert_into_eq(const string&: piece) -> void;
+function text_setting(const string&: id, const string&: key) -> void;
+function update_busy() -> void;
+function pick_file(const string&: mode, const string&: title, const string&: pattern) -> string;
+
+function call(const string&: name, const string&: arg) -> string {
+    return grove::call("arbor." + name, arg);
+} end function call
+
+function el(const string&: tag, const string&: cls, const string&: label) -> grove::Element {
+    grove::Element: e = grove::create_element(tag);
+    if (!cls.empty()) then {
+        e.set_attribute("class", cls);
+    }
+    if (!label.empty()) then {
+        e.set_inner_text(label);
+    }
+    return e;
+} end function el
+
+function clear(grove::Element&: e) -> void {
+    while (e.child_count() > 0l) {
+        e.child(0l).remove();
+    }
+} end function clear
+
+function show(const string&: id, bool: on) -> void {
+    grove::Element: e = grove::get_by_id(id);
+    if (on) then {
+        e.remove_class("hidden");
+    } else then {
+        e.add_class("hidden");
+    }
+} end function show
+
+function tab2(const string&: a, const string&: b) -> string {
+    return a + "\t" + b;
+} end function tab2
+
+function tab3(const string&: a, const string&: b, const string&: c) -> string {
+    return a + "\t" + b + "\t" + c;
+} end function tab3
+
+function apply_theme() -> void {
+    grove::Element: body = grove::get_by_id("app");
+    auto: rows = call("theme_vars", "").split("\n");
+    for (long int: i = 0l; i < rows.size(); i += 1l) {
+        auto: kv = rows[i].split("\t");
+        if (kv.size() == 2l) then {
+            body.set_style(kv[0], kv[1]);
+        }
+    }
+    string: scale = call("setting", "ui-scale");
+    if (!scale.empty()) then {
+        body.set_style("zoom", scale);
+    }
+} end function apply_theme
+
+function show_home() -> void {
+    build_tabs();
+    build_kinds();
+    build_saved();
+    string: rec = call("recovery", "");
+    if (!rec.empty() && call("has_graph", "") != "1") then {
+        grove::get_by_id("recovery-text").set_inner_text("\"" + rec + "\" wasn't saved when Arbor last closed.");
+        show("recovery", true);
+    } else then {
+        show("recovery", false);
+    }
+    last_page = "home";
+    grove::get_by_id("home").show_page();
+} end function show_home
+
+function build_tabs() -> void {
+    grove::Element: tabs = grove::get_by_id("section-tabs");
+    clear(tabs);
+    auto: rows = call("sections", "").split("\n");
+    for (long int: i = 0l; i < rows.size(); i += 1l) {
+        auto: f = rows[i].split("\t");
+        if (f.size() < 3l) then {
+            continue;
+        }
+        string: id = f[0];
+        grove::Element: t = el("div", "tab", f[1]);
+        if (id == current_section) then {
+            t.add_class("on");
+            grove::get_by_id("section-about").set_inner_text(f[2]);
+        }
+        t.on("click", [id](grove::Event&: e) -> void {
+            current_section = id;
+            build_tabs();
+            build_kinds();
+        });
+        tabs.append_child(t);
+    }
+} end function build_tabs
+
+function build_kinds() -> void {
+    grove::Element: cards = grove::get_by_id("kind-cards");
+    clear(cards);
+    auto: rows = call("kinds", current_section).split("\n");
+    for (long int: i = 0l; i < rows.size(); i += 1l) {
+        auto: f = rows[i].split("\t");
+        if (f.size() < 4l) then {
+            continue;
+        }
+        string: kind = f[0];
+        grove::Element: c = el("column", "card", "");
+        c.append_child(el("p", "card-title", f[1]));
+        c.append_child(el("p", "card-formula", f[2]));
+        c.append_child(el("p", "card-text", f[3]));
+        c.on("click", [kind](grove::Event&: e) -> void {
+            leave_graph([kind]() -> void {
+                call("new", kind);
+                enter_graph();
+            });
+        });
+        cards.append_child(c);
+    }
+    grove::Element: ex = grove::get_by_id("example-cards");
+    clear(ex);
+    auto: erows = call("examples", current_section).split("\n");
+    for (long int: i = 0l; i < erows.size(); i += 1l) {
+        auto: f = erows[i].split("\t");
+        if (f.size() < 3l) then {
+            continue;
+        }
+        string: id = f[0];
+        grove::Element: c = el("column", "card example", "");
+        c.append_child(el("p", "card-title", f[1]));
+        c.append_child(el("p", "card-text", f[2]));
+        c.on("click", [id](grove::Event&: e) -> void {
+            leave_graph([id]() -> void {
+                call("open_example", id);
+                enter_graph();
+            });
+        });
+        ex.append_child(c);
+    }
+} end function build_kinds
+
+function build_saved() -> void {
+    grove::Element: cards = grove::get_by_id("saved-cards");
+    clear(cards);
+    auto: rows = call("saved", "").split("\n");
+    long int: count = 0l;
+    for (long int: i = 0l; i < rows.size(); i += 1l) {
+        auto: f = rows[i].split("\t");
+        if (f.size() < 6l) then {
+            continue;
+        }
+        count += 1l;
+        string: id = f[0];
+        string: title = f[1];
+        grove::Element: c = el("column", "card saved", "");
+        if (!f[4].empty()) then {
+            grove::Element: img = grove::create_element("img");
+            img.set_attribute("src", f[4]);
+            img.set_attribute("class", "thumb");
+            c.append_child(img);
+        } else then {
+            c.append_child(el("column", "thumb-empty", "no picture yet"));
+        }
+        c.append_child(el("p", "card-title", title));
+        string: space = "2D";
+        if (f[2] == "3d") then {
+            space = "3D";
+        }
+        c.append_child(el("p", "card-text", space + " \u{B7} " + f[3]));
+        if (!f[5].empty()) then {
+            c.append_child(el("p", "card-text", f[5]));
+        }
+        grove::Element: actions = el("row", "card-actions", "");
+        grove::Element: open = el("button", "small", "Open");
+        grove::Element: dup = el("button", "ghost small", "Copy");
+        grove::Element: ren = el("button", "ghost small", "Rename");
+        grove::Element: del = el("button", "ghost small danger", "Delete");
+        actions.append_child(open);
+        actions.append_child(dup);
+        actions.append_child(ren);
+        actions.append_child(del);
+        c.append_child(actions);
+        open.on("click", [id](grove::Event&: e) -> void {
+            e.stop_propagation();
+            open_saved(id);
+        });
+        c.on("click", [id](grove::Event&: e) -> void {
+            open_saved(id);
+        });
+        dup.on("click", [id](grove::Event&: e) -> void {
+            e.stop_propagation();
+            call("duplicate", id);
+            build_saved();
+        });
+        ren.on("click", [id, title](grove::Event&: e) -> void {
+            e.stop_propagation();
+            grove::prompt_string("Rename graph", "New name:", title, [id](string: name) -> void {
+                call("rename", tab2(id, name));
+                build_saved();
+            });
+        });
+        del.on("click", [id, title](grove::Event&: e) -> void {
+            e.stop_propagation();
+            grove::confirm("Delete graph", "Delete \"" + title + "\"? This can't be undone.", [id](bool: yes) -> void {
+                if (yes) then {
+                    call("delete", id);
+                    build_saved();
+                }
+            });
+        });
+        cards.append_child(c);
+    }
+    show("saved-block", count > 0l);
+    if (count == 1l) then {
+        grove::get_by_id("saved-count").set_inner_text("1 graph");
+    } else then {
+        grove::get_by_id("saved-count").set_inner_text(count.to_string() + " graphs");
+    }
+} end function build_saved
+
+function open_saved(const string&: id) -> void {
+    leave_graph([id]() -> void {
+        string: r = call("open", id);
+        if (r == "ok") then {
+            enter_graph();
+        } else then {
+            grove::popup_error("Can't open graph", r);
+        }
+    });
+} end function open_saved
+
+function leave_graph(function() -> void: next) -> void {
+    if (call("has_graph", "") != "1" || call("dirty", "") != "1") then {
+        call("close", "");
+        next();
+        return;
+    }
+    string: mode = call("setting", "on-close");
+    if (mode == "save") then {
+        call("save", "");
+        call("close", "");
+        next();
+        return;
+    }
+    if (mode == "discard") then {
+        call("close", "");
+        next();
+        return;
+    }
+    string: title = call("title", "");
+    grove::prompt_choice("Unsaved changes", "\"" + title + "\" has changes that aren't saved.\nWhat should happen to them?", "Save|Don't save|Cancel", "Save", [next](string: pick) -> void {
+        if (pick == "Cancel") then {
+            return;
+        }
+        if (pick == "Save") then {
+            string: r = call("save", "");
+            if (r != "ok") then {
+                grove::popup_error("Couldn't save", r);
+                return;
+            }
+        }
+        call("close", "");
+        next();
+    });
+} end function leave_graph
+
+function enter_graph() -> void {
+    grove::get_by_id("graph-title").set_value_string(call("title", ""));
+    grove::get_by_id("quick-type").set_value_string(call("setting", "number-type"));
+    build_add_menu();
+    build_items();
+    sync_view();
+    build_bounds_bar();
+    last_revision = "";
+    last_page = "graph";
+    grove::get_by_id("graph").show_page();
+    refresh();
+} end function enter_graph
+
+function build_add_menu() -> void {
+    grove::Element: menu = grove::get_by_id("add-kind");
+    clear(menu);
+    auto: rows = call("kinds_here", "").split("\n");
+    for (long int: i = 0l; i < rows.size(); i += 1l) {
+        auto: f = rows[i].split("\t");
+        if (f.size() < 2l) then {
+            continue;
+        }
+        grove::Element: o = el("option", "", f[1]);
+        o.set_attribute("value", f[0]);
+        menu.append_child(o);
+    }
+    menu.remove_attribute("value");
+    menu.set_attribute("placeholder", "+ Add to graph");
+} end function build_add_menu
+
+function sync_view() -> void {
+    auto: f = call("view_state", "").split("\t");
+    if (f.size() < 6l) then {
+        return;
+    }
+    building = true;
+    grove::get_by_id("v-grid").set_value_bool(f[0] == "1");
+    grove::get_by_id("v-axes").set_value_bool(f[1] == "1");
+    grove::get_by_id("v-labels").set_value_bool(f[2] == "1");
+    grove::get_by_id("v-degrees").set_value_bool(f[3] == "1");
+    grove::get_by_id("v-perspective").set_value_bool(f[4] == "1");
+    grove::get_by_id("v-equal").set_value_bool(f[5] == "1");
+    building = false;
+    bool: solid = call("space", "") == "3d";
+    auto: only3 = grove::get_by_class("only-3d");
+    for (long int: i = 0l; i < only3.size(); i += 1l) {
+        if (solid) then {
+            only3.at(i).remove_class("hidden");
+        } else then {
+            only3.at(i).add_class("hidden");
+        }
+    }
+    auto: only2 = grove::get_by_class("only-2d");
+    for (long int: i = 0l; i < only2.size(); i += 1l) {
+        if (solid) then {
+            only2.at(i).add_class("hidden");
+        } else then {
+            only2.at(i).remove_class("hidden");
+        }
+    }
+} end function sync_view
+
+function build_items() -> void {
+    grove::Element: list = grove::get_by_id("items");
+    clear(list);
+    string: all = call("items", "");
+    last_items = all;
+    auto: rows = all.split("\n");
+    for (long int: i = 0l; i < rows.size(); i += 1l) {
+        auto: f = rows[i].split("\t");
+        if (f.size() < 2l) then {
+            continue;
+        }
+        list.append_child(make_card(f[0]));
+    }
+    last_revision = "";
+} end function build_items
+
+function make_card(const string&: id) -> grove::Element {
+    auto: lines = call("item", id).split("\n");
+    auto: head = lines[0].split("\t");
+    grove::Element: card = el("column", "item", "");
+    card.set_attribute("id", "card-" + id);
+    if (head.size() < 6l) then {
+        return card;
+    }
+    string: kind = head[0];
+    if (head[2] != "1") then {
+        card.add_class("off");
+    }
+
+    grove::Element: top = el("row", "item-head", "");
+    grove::Element: sw = el("button", "swatch", "");
+    sw.set_style("background", head[1]);
+    sw.set_attribute("title", "Change color");
+    sw.set_attribute("id", "swb-" + id);
+    sw.on("click", [id](grove::Event&: e) -> void {
+        toggle_swatches(id);
+    });
+    if (kind != "define") then {
+        top.append_child(sw);
+    }
+    top.append_child(el("text", "item-title", head[3]));
+    top.append_child(el("text", "item-formula", head[4]));
+    top.append_child(el("div", "grow", ""));
+    grove::Element: vis = grove::create_element("input_bool");
+    vis.set_attribute("appearance", "switch");
+    vis.set_attribute("title", "Show or hide");
+    vis.set_value_bool(head[2] == "1");
+    vis.on("change", [id](grove::Event&: e) -> void {
+        bool: on = e.target().value_bool();
+        if (on) then {
+            call("set_visible", tab2(id, "1"));
+            grove::get_by_id("card-" + id).remove_class("off");
+        } else then {
+            call("set_visible", tab2(id, "0"));
+            grove::get_by_id("card-" + id).add_class("off");
+        }
+    });
+    if (kind != "define") then {
+        top.append_child(vis);
+    }
+    grove::Element: up = el("button", "ghost small icon", "\u{2191}");
+    up.set_attribute("title", "Move up");
+    up.on("click", [id](grove::Event&: e) -> void {
+        call("move_item", tab2(id, "-1"));
+        build_items();
+    });
+    grove::Element: dn = el("button", "ghost small icon", "\u{2193}");
+    dn.set_attribute("title", "Move down");
+    dn.on("click", [id](grove::Event&: e) -> void {
+        call("move_item", tab2(id, "1"));
+        build_items();
+    });
+    grove::Element: copy = el("button", "ghost small icon", "\u{29C9}");
+    copy.set_attribute("title", "Duplicate");
+    copy.on("click", [id](grove::Event&: e) -> void {
+        call("duplicate_item", id);
+        build_items();
+    });
+    grove::Element: del = el("button", "ghost small icon danger", "\u{2715}");
+    del.set_attribute("title", "Remove");
+    del.on("click", [id](grove::Event&: e) -> void {
+        call("remove_item", id);
+        build_items();
+    });
+    top.append_child(up);
+    top.append_child(dn);
+    top.append_child(copy);
+    top.append_child(del);
+    card.append_child(top);
+    grove::Element: swatches = el("row", "swatches hidden", "");
+    swatches.set_attribute("id", "sw-" + id);
+    swatches.set_attribute("data-color", head[1]);
+    card.append_child(swatches);
+
+    string: ranged = "|";
+    for (long int: i = 1l; i < lines.size(); i += 1l) {
+        auto: d = lines[i].split("\t");
+        if (d.size() >= 9l && d[0] == "D" && d[8] == "1") then {
+            ranged = ranged + d[2] + "|" + d[5] + "|";
+        }
+    }
+    grove::Element: domains = el("column", "status", "");
+    long int: domain_count = 0l;
+
+    grove::Element: extra = el("row", "fields", "");
+    long int: extras = 0l;
+    grove::Element: opts = el("row", "options", "");
+    long int: options = 0l;
+    grove::Element: top_picks = el("row", "fields", "");
+    long int: picks = 0l;
+    bool: seen_eq = false;
+    string: eq_math = "";
+    bool: branched = false;
+    string: branch_value = "0";
+    for (long int: i = 1l; i < lines.size(); i += 1l) {
+        auto: f = lines[i].split("\t");
+        if (f.size() < 4l) then {
+            continue;
+        }
+        string: field = f[1];
+        if (f[0] == "M") then {
+            eq_math = f[3];
+        } else if (f[0] == "B") then {
+            branched = f[2] == "1";
+            branch_value = f[3];
+        } else if (f[0] == "D") then {
+            if (f.size() >= 9l) then {
+                domains.append_child(make_domain(id, lines[i]));
+                domain_count += 1l;
+            }
+        } else if (f[0] == "F") then {
+            if (std::strings::contains(ranged, "|" + field + "|")) then {
+                continue;
+            }
+            if (f.size() > 6l && f[5] == "4") then {
+                grove::Element: sel = grove::create_element("input_select");
+                auto: choices = f[6].split("|");
+                for (long int: c = 0l; c < choices.size(); c += 1l) {
+                    grove::Element: o = el("option", "", choices[c]);
+                    o.set_attribute("value", choices[c]);
+                    sel.append_child(o);
+                }
+                if (f[3].empty()) then {
+                    sel.set_value_string(choices[0]);
+                } else then {
+                    sel.set_value_string(f[3]);
+                }
+                if (f.size() > 4l && !f[4].empty()) then {
+                    sel.set_attribute("title", f[4]);
+                }
+                sel.set_attribute("class", "field-choice");
+                sel.set_attribute("id", "f-" + id + "-" + field);
+                sel.on("change", [id, field](grove::Event&: e) -> void {
+                    call("set_field", tab3(id, field, e.target().value_string()));
+                    last_items = "";
+                    last_revision = "";
+                });
+                grove::Element: cbox = el("row", "field", "");
+                cbox.append_child(el("text", "field-label", f[2]));
+                cbox.append_child(sel);
+                if (!seen_eq) then {
+                    if (picks == 0l) then {
+                        card.append_child(top_picks);
+                    }
+                    top_picks.append_child(cbox);
+                    picks += 1l;
+                } else then {
+                    extra.append_child(cbox);
+                    extras += 1l;
+                }
+                continue;
+            }
+            string: tag = "input_string";
+            bool: plain_text = kind == "points" || kind == "points3d" || kind == "turmite" || field == "init" || field == "init_v" || field == "init_w" || field == "axis" || field == "slices" || field == "level" || std::strings::contains(field, "edge_");
+            if (f.size() > 5l && (f[5] == "1" || f[5] == "2" || f[5] == "3") && !plain_text) then {
+                tag = "input_math";
+            }
+            grove::Element: input = grove::create_element(tag);
+            input.set_value_string(f[3]);
+            if (f.size() > 4l && !f[4].empty()) then {
+                input.set_attribute("placeholder", f[4]);
+                input.set_attribute("title", f[4]);
+            }
+            input.on("change", [id, field](grove::Event&: e) -> void {
+                call("set_field", tab3(id, field, e.target().value_string()));
+            });
+            input.set_attribute("data-item", id);
+            input.set_attribute("data-field", field);
+            input.set_attribute("id", "f-" + id + "-" + field);
+            if (f.size() > 5l && f[5] == "1") then {
+                seen_eq = true;
+                input.set_attribute("class", "eq");
+                input.set_attribute("id", "eqin-" + id);
+                input.on("focus", [id](grove::Event&: e) -> void {
+                    last_eq_id = id;
+                });
+                input.on("click", [id](grove::Event&: e) -> void {
+                    last_eq_id = id;
+                });
+                input.on("input", [id](grove::Event&: e) -> void {
+                    last_eq_id = id;
+                });
+                grove::Element: wrap = el("column", "eq-wrap", "");
+                grove::Element: row = el("row", "eq-row", "");
+                row.set_attribute("id", "eqrow-" + id);
+                if (branched) then {
+                    row.add_class("with-branch");
+                }
+                row.append_child(input);
+                grove::Element: bb = el("row", "branch", "");
+                bb.set_attribute("id", "branch-" + id);
+                bb.set_attribute("title", "Which branch of the many-valued functions (\u{221A}, log, arcsin, z^a, ...) to draw: 0 is the principal one, 1, 2, -1, ... the others");
+                bb.append_child(el("text", "branch-label", "branch k"));
+                grove::Element: k = grove::create_element("input_integer");
+                k.set_attribute("min", "-99");
+                k.set_attribute("max", "99");
+                k.set_attribute("value", branch_value);
+                k.set_attribute("class", "branch-input");
+                k.set_attribute("data-item", id);
+                k.set_attribute("data-field", "branch");
+                k.on("change", [id](grove::Event&: e) -> void {
+                    call("set_field", tab3(id, "branch", e.target().value_integer().to_string()));
+                });
+                bb.append_child(k);
+                if (!branched) then {
+                    bb.add_class("hidden");
+                }
+                row.append_child(bb);
+                wrap.append_child(row);
+                card.append_child(wrap);
+            } else if (f.size() > 5l && f[5] == "2") then {
+                input.set_attribute("class", "field-input wide-input");
+                grove::Element: wbox = el("row", "field wide-field", "");
+                wbox.append_child(el("text", "field-label", f[2]));
+                wbox.append_child(input);
+                card.append_child(wbox);
+            } else then {
+                input.set_attribute("class", "field-input");
+                grove::Element: box = el("row", "field", "");
+                box.append_child(el("text", "field-label", f[2]));
+                box.append_child(input);
+                extra.append_child(box);
+                extras += 1l;
+            }
+        } else if (f[0] == "O") then {
+            grove::Element: cb = grove::create_element("input_bool");
+            cb.set_inner_text(f[2]);
+            cb.set_value_bool(f[3] == "1");
+            if (f.size() > 4l && !f[4].empty()) then {
+                cb.set_attribute("title", f[4]);
+            }
+            cb.on("change", [id, field](grove::Event&: e) -> void {
+                if (e.target().value_bool()) then {
+                    call("set_option", tab3(id, field, "1"));
+                } else then {
+                    call("set_option", tab3(id, field, "0"));
+                }
+            });
+            opts.append_child(cb);
+            options += 1l;
+        }
+    }
+    if (extras > 0l) then {
+        card.append_child(extra);
+    }
+    if (domain_count > 0l) then {
+        card.append_child(domains);
+    }
+    if (options > 0l) then {
+        card.append_child(opts);
+    }
+    grove::Element: slider = el("column", "status", "");
+    slider.set_attribute("id", "sl-" + id);
+    card.append_child(slider);
+    grove::Element: param = el("column", "status", "");
+    param.set_attribute("id", "pt-" + id);
+    card.append_child(param);
+    grove::Element: status = el("column", "status", "");
+    status.set_attribute("id", "st-" + id);
+    card.append_child(status);
+    return card;
+} end function make_card
+
+function toggle_swatches(const string&: id) -> void {
+    grove::Element: box = grove::get_by_id("sw-" + id);
+    if (!box.exists()) then {
+        return;
+    }
+    if (!box.has_class("hidden")) then {
+        box.add_class("hidden");
+        clear(box);
+        return;
+    }
+    clear(box);
+    string: current = grove::get_by_id("swb-" + id).get_attribute("data-color");
+    if (current.empty()) then {
+        current = box.get_attribute("data-color");
+    }
+    auto: colors = call("palette", "").split("\t");
+    for (long int: i = 0l; i < colors.size(); i += 1l) {
+        string: c = colors[i];
+        if (c.empty()) then {
+            continue;
+        }
+        grove::Element: b = el("button", "swatch-pick", "");
+        b.set_style("background", c);
+        b.set_attribute("title", c);
+        if (c == current) then {
+            b.add_class("on");
+        }
+        b.on("click", [id, c](grove::Event&: e) -> void {
+            string: got = call("set_color", tab2(id, c));
+            grove::Element: sw = grove::get_by_id("swb-" + id);
+            sw.set_style("background", got);
+            sw.set_attribute("data-color", got);
+            toggle_swatches(id);
+        });
+        box.append_child(b);
+    }
+    grove::Element: custom = grove::create_element("input_color");
+    custom.set_attribute("title", "Any color");
+    custom.set_value_color(current);
+    custom.on("change", [id](grove::Event&: e) -> void {
+        string: got = call("set_color", tab2(id, e.target().value_color()));
+        grove::Element: sw = grove::get_by_id("swb-" + id);
+        sw.set_style("background", got);
+        sw.set_attribute("data-color", got);
+    });
+    box.append_child(el("text", "field-label", "or any color"));
+    box.append_child(custom);
+    box.remove_class("hidden");
+} end function toggle_swatches
+
+function make_domain(const string&: id, const string&: line) -> grove::Element {
+    auto: f = line.split("\t");
+    grove::Element: row = el("row", "domain-row", "");
+    string: lo_field = f[2];
+    string: hi_field = f[5];
+    if (f[8] == "1") then {
+        row.append_child(el("text", "field-label", f[1] + " from"));
+    } else then {
+        row.append_child(el("text", "field-label", "draw where " + f[1] + " is in"));
+    }
+    string: lo_mark = "(";
+    if (f[4] == "1") then {
+        lo_mark = "[";
+    }
+    string: hi_mark = ")";
+    if (f[7] == "1") then {
+        hi_mark = "]";
+    }
+    if (f[3].empty() || f[3] == "-inf" || f[3] == "inf") then {
+        lo_mark = "(";
+    }
+    if (f[6].empty() || f[6] == "inf" || f[6] == "-inf") then {
+        hi_mark = ")";
+    }
+    grove::Element: lb = el("button", "bracket", lo_mark);
+    lb.set_attribute("id", "br-" + id + "-" + lo_field);
+    lb.set_attribute("title", "Click to include or leave out this end: [ includes it, ( leaves it out");
+    lb.on("click", [id, lo_field](grove::Event&: e) -> void {
+        if (e.target().inner_text() == "[") then {
+            e.target().set_inner_text("(");
+            call("set_option", tab3(id, lo_field + "_closed", "0"));
+        } else then {
+            e.target().set_inner_text("[");
+            call("set_option", tab3(id, lo_field + "_closed", "1"));
+        }
+    });
+    grove::Element: lo = grove::create_element("input_string");
+    lo.set_attribute("class", "domain-input");
+    lo.set_value_string(f[3]);
+    lo.set_attribute("data-item", id);
+    lo.set_attribute("data-field", lo_field);
+    lo.set_attribute("id", "f-" + id + "-" + lo_field);
+    lo.on("change", [id, lo_field](grove::Event&: e) -> void {
+        string: v = e.target().value_string();
+        call("set_field", tab3(id, lo_field, v));
+        if (v.empty() || v == "-inf" || v == "inf") then {
+            grove::Element: b = grove::get_by_id("br-" + id + "-" + lo_field);
+            if (b.exists()) then {
+                b.set_inner_text("(");
+            }
+        }
+    });
+    grove::Element: hi = grove::create_element("input_string");
+    hi.set_attribute("class", "domain-input");
+    hi.set_value_string(f[6]);
+    hi.set_attribute("data-item", id);
+    hi.set_attribute("data-field", hi_field);
+    hi.set_attribute("id", "f-" + id + "-" + hi_field);
+    hi.on("change", [id, hi_field](grove::Event&: e) -> void {
+        string: v = e.target().value_string();
+        call("set_field", tab3(id, hi_field, v));
+        if (v.empty() || v == "inf" || v == "-inf") then {
+            grove::Element: b = grove::get_by_id("br-" + id + "-" + hi_field);
+            if (b.exists()) then {
+                b.set_inner_text(")");
+            }
+        }
+    });
+    lo.set_attribute("placeholder", "-\u{221E}");
+    hi.set_attribute("placeholder", "\u{221E}");
+    lo.set_attribute("title", "Leave empty or write -inf for no lower end");
+    hi.set_attribute("title", "Leave empty or write inf for no upper end");
+    grove::Element: hb = el("button", "bracket", hi_mark);
+    hb.set_attribute("id", "br-" + id + "-" + hi_field);
+    hb.set_attribute("title", "Click to include or leave out this end: ] includes it, ) leaves it out");
+    hb.on("click", [id, hi_field](grove::Event&: e) -> void {
+        if (e.target().inner_text() == "]") then {
+            e.target().set_inner_text(")");
+            call("set_option", tab3(id, hi_field + "_closed", "0"));
+        } else then {
+            e.target().set_inner_text("]");
+            call("set_option", tab3(id, hi_field + "_closed", "1"));
+        }
+    });
+    row.append_child(lb);
+    row.append_child(lo);
+    row.append_child(el("text", "field-label", ","));
+    row.append_child(hi);
+    row.append_child(hb);
+    return row;
+} end function make_domain
+
+function build_bounds_bar() -> void {
+    grove::Element: bar = grove::get_by_id("bounds-bar");
+    clear(bar);
+    auto: f = call("bounds_state", "").split("\t");
+    if (f.size() < 5l) then {
+        return;
+    }
+    bool: solid = f[0] == "3d";
+    auto: add = [solid](grove::Element&: into, const string&: label, const string&: key, const string&: value, const string&: hint) -> void {
+        into.append_child(el("text", "field-label", label));
+        grove::Element: input = grove::create_element("input_string");
+        input.set_attribute("class", "bound-input");
+        input.set_value_string(value);
+        input.set_attribute("placeholder", hint);
+        input.on("change", [key](grove::Event&: e) -> void {
+            string: r = call("set_bound", tab2(key, e.target().value_string()));
+            if (r != "ok") then {
+                grove::popup_error("Bounds", r);
+            }
+            build_bounds_bar();
+        });
+        into.append_child(input);
+    };
+    if (solid) then {
+        bar.append_child(el("text", "", "Box:"));
+        add(bar, "x from", "x-min", f[1], "");
+        add(bar, "to", "x-max", f[2], "");
+        add(bar, "y from", "y-min", f[3], "");
+        add(bar, "to", "y-max", f[4], "");
+        string: z1 = "";
+        string: z2 = "";
+        if (f.size() > 6l) then {
+            z1 = f[5];
+            z2 = f[6];
+        }
+        add(bar, "z from", "z-min", z1, "auto");
+        add(bar, "to", "z-max", z2, "auto");
+    } else then {
+        bar.append_child(el("text", "", "Draw only:"));
+        add(bar, "x from", "x-min", f[1], "-\u{221E}");
+        add(bar, "to", "x-max", f[2], "\u{221E}");
+        add(bar, "y from", "y-min", f[3], "-\u{221E}");
+        add(bar, "to", "y-max", f[4], "\u{221E}");
+    }
+    bar.append_child(el("div", "grow", ""));
+    grove::Element: reset = el("button", "ghost small", "Clear");
+    if (solid) then {
+        reset.set_inner_text("Default box");
+    }
+    reset.on("click", [](grove::Event&: e) -> void {
+        call("set_bound", tab2("clear", ""));
+        build_bounds_bar();
+    });
+    bar.append_child(reset);
+} end function build_bounds_bar
+
+function show_library() -> void {
+    grove::get_by_id("library").show_page();
+    build_library();
+    grove::get_by_id("library-search").focus();
+} end function show_library
+
+function build_library() -> void {
+    grove::Element: tabs = grove::get_by_id("library-tabs");
+    clear(tabs);
+    auto: cats = call("library_categories", "").split("\n");
+    string: all_cats = "All";
+    for (long int: i = 0l; i < cats.size(); i += 1l) {
+        if (!cats[i].empty()) then {
+            all_cats = all_cats + "\n" + cats[i];
+        }
+    }
+    auto: names = all_cats.split("\n");
+    for (long int: i = 0l; i < names.size(); i += 1l) {
+        string: c = names[i];
+        grove::Element: t = el("div", "tab", c);
+        if (c == lib_category) then {
+            t.add_class("on");
+        }
+        t.on("click", [c](grove::Event&: e) -> void {
+            lib_category = c;
+            build_library();
+        });
+        tabs.append_child(t);
+    }
+    grove::Element: list = grove::get_by_id("library-list");
+    clear(list);
+    string: query = std::strings::to_lower(grove::get_by_id("library-search").value_string());
+    auto: rows = call("library", "").split("\n");
+    long int: shown = 0l;
+    for (long int: i = 0l; i < rows.size(); i += 1l) {
+        auto: f = rows[i].split("\t");
+        if (f.size() < 9l) then {
+            continue;
+        }
+        if (lib_category != "All" && f[4] != lib_category) then {
+            continue;
+        }
+        if (!query.empty()) then {
+            string: hay = std::strings::to_lower(f[1] + " " + f[2] + " " + f[5] + " " + f[6] + " " + f[4]);
+            if (!std::strings::contains(hay, query)) then {
+                continue;
+            }
+        }
+        shown += 1l;
+        string: kind = f[0];
+        string: name = f[1];
+        grove::Element: entry = el("column", "lib-entry", "");
+        grove::Element: head = el("row", "lib-head", "");
+        grove::Element: n = el("button", "ghost lib-name", name);
+        n.set_attribute("title", "Put this in the equation you were last editing");
+        n.on("click", [kind, name](grove::Event&: e) -> void {
+            if (kind == "function") then {
+                insert_into_eq(name + "(");
+            } else if (kind == "operator") then {
+                insert_into_eq(" " + name + " ");
+            } else then {
+                insert_into_eq(name);
+            }
+        });
+        head.append_child(n);
+        if (!f[2].empty() && f[2] != name) then {
+            head.append_child(el("text", "lib-usage", f[2]));
+        }
+        if (!f[3].empty()) then {
+            head.append_child(el("math", "lib-symbol", f[3]));
+        }
+        head.append_child(el("div", "grow", ""));
+        head.append_child(el("text", "lib-badge", kind));
+        head.append_child(el("text", "lib-badge", f[4]));
+        entry.append_child(head);
+        if (!f[5].empty()) then {
+            entry.append_child(el("p", "lib-text", f[5]));
+        }
+        if (!f[7].empty()) then {
+            auto: args = f[7].split("\u{1F}");
+            for (long int: j = 0l; j < args.size(); j += 1l) {
+                auto: parts = args[j].split(": ");
+                if (parts.size() < 2l) then {
+                    continue;
+                }
+                string: rest = parts[1];
+                for (long int: q = 2l; q < parts.size(); q += 1l) {
+                    rest = rest + ": " + parts[q];
+                }
+                grove::Element: a = el("row", "lib-arg", "");
+                a.append_child(el("text", "lib-arg-name", parts[0]));
+                a.append_child(el("text", "lib-text", rest));
+                entry.append_child(a);
+            }
+        }
+        string: more = "";
+        if (!f[6].empty()) then {
+            more = "Also written " + f[6] + ".";
+        }
+        if (!f[8].empty()) then {
+            if (kind == "constant") then {
+                more = more + " Value: " + f[8];
+            } else then {
+                more = more + " Works with " + f[8] + ".";
+            }
+        }
+        if (!more.empty()) then {
+            entry.append_child(el("p", "lib-more", more));
+        }
+        list.append_child(entry);
+    }
+    if (shown == 1l) then {
+        grove::get_by_id("library-count").set_inner_text("1 entry");
+    } else then {
+        grove::get_by_id("library-count").set_inner_text(shown.to_string() + " entries");
+    }
+    if (shown == 0l) then {
+        list.append_child(el("p", "muted", "Nothing matches. Any other word you type in an equation becomes a variable, and Arbor offers a slider for it."));
+    }
+} end function build_library
+
+function insert_into_eq(const string&: piece) -> void {
+    if (call("has_graph", "") != "1" || last_eq_id.empty()) then {
+        return;
+    }
+    grove::Element: input = grove::get_by_id("eqin-" + last_eq_id);
+    if (!input.exists()) then {
+        return;
+    }
+    string: value = input.value_string() + piece;
+    input.set_value_string(value);
+    call("set_field", tab3(last_eq_id, "eq", value));
+    back_from_settings();
+    grove::get_by_id("eqin-" + last_eq_id).focus();
+} end function insert_into_eq
+
+function update_busy() -> void {
+    auto: f = call("busy", "").split("\t");
+    if (f.size() < 2l) then {
+        return;
+    }
+    short float: seconds = std::io::parse_float<short float>(f[0]);
+    if (seconds < 5.0) then {
+        show("busy-bar", false);
+        stop_asked = false;
+        return;
+    }
+    if (stop_asked && f[1] == "1" && seconds > 8.0) then {
+        grove::get_by_id("busy-text").set_inner_text("This drawing isn't stopping (" + f[0] + " s). You can quit Arbor; your graph is kept and offered back when it opens again.");
+        show("busy-stop", false);
+    } else then {
+        grove::get_by_id("busy-text").set_inner_text("Still drawing (" + f[0] + " s)\u{2026}");
+        show("busy-stop", true);
+    }
+    show("busy-bar", true);
+} end function update_busy
+
+function pick_file(const string&: mode, const string&: title, const string&: pattern) -> string {
+    call("watch", "0");
+    string: path = grove::choose_file(mode, title, pattern);
+    call("watch", "1");
+    return path;
+} end function pick_file
+
+function build_quick_types() -> void {
+    grove::Element: menu = grove::get_by_id("quick-type");
+    clear(menu);
+    auto: rows = call("number_types", "").split("\n");
+    for (long int: i = 0l; i < rows.size(); i += 1l) {
+        auto: f = rows[i].split("\t");
+        if (f.size() < 2l) then {
+            continue;
+        }
+        grove::Element: o = el("option", "", f[1].split(" (")[0]);
+        o.set_attribute("value", f[0]);
+        menu.append_child(o);
+    }
+    menu.set_value_string(call("setting", "number-type"));
+} end function build_quick_types
+
+function update_slider(const string&: id, const string&: line) -> void {
+    grove::Element: box = grove::get_by_id("sl-" + id);
+    auto: f = line.split("\t");
+    if (f.size() < 7l) then {
+        return;
+    }
+    string: name = f[1];
+    string: key = name + "|" + f[3] + "|" + f[4] + "|" + f[5];
+    if (box.get_attribute("data-key") == key && box.child_count() > 0l) then {
+        grove::Element: s = grove::get_by_id("slider-" + id);
+        if (!s.active() && !s.focused()) then {
+            s.set_value_float(std::io::parse_float<short float>(f[2]));
+        }
+        if (f[6] == "1") then {
+            grove::get_by_id("play-" + id).set_inner_text("\u{23F8}");
+        } else then {
+            grove::get_by_id("play-" + id).set_inner_text("\u{25B6}");
+        }
+        return;
+    }
+    clear(box);
+    box.set_attribute("data-key", key);
+    grove::Element: row = el("row", "slider-row", "");
+    grove::Element: play = el("button", "ghost small icon", "\u{25B6}");
+    play.set_attribute("id", "play-" + id);
+    play.set_attribute("title", "Play");
+    if (f[6] == "1") then {
+        play.set_inner_text("\u{23F8}");
+    }
+    play.on("click", [name](grove::Event&: e) -> void {
+        if (e.target().inner_text() == "\u{25B6}") then {
+            call("play", tab2(name, "1"));
+            e.target().set_inner_text("\u{23F8}");
+        } else then {
+            call("play", tab2(name, "0"));
+            e.target().set_inner_text("\u{25B6}");
+        }
+    });
+    grove::Element: s = grove::create_element("input_slider");
+    s.set_attribute("id", "slider-" + id);
+    s.set_attribute("min", f[3]);
+    s.set_attribute("max", f[4]);
+    s.set_attribute("step", f[5]);
+    s.set_value_float(std::io::parse_float<short float>(f[2]));
+    s.on("input", [name](grove::Event&: e) -> void {
+        call("set_slider", tab2(name, e.target().value_float().to_string()));
+    });
+    s.on("change", [name](grove::Event&: e) -> void {
+        call("set_slider", tab2(name, e.target().value_float().to_string()));
+    });
+    row.append_child(play);
+    row.append_child(s);
+    box.append_child(row);
+
+    grove::Element: bounds = el("row", "slider-bounds", "");
+    grove::Element: lo = grove::create_element("input_string");
+    lo.set_value_string(f[3]);
+    grove::Element: hi = grove::create_element("input_string");
+    hi.set_value_string(f[4]);
+    grove::Element: step = grove::create_element("input_string");
+    step.set_value_string(f[5]);
+    bounds.append_child(el("text", "field-label", "from"));
+    bounds.append_child(lo);
+    bounds.append_child(el("text", "field-label", "to"));
+    bounds.append_child(hi);
+    bounds.append_child(el("text", "field-label", "step"));
+    bounds.append_child(step);
+    auto: apply = [name, id](grove::Event&: e) -> void {
+        grove::Element: b = grove::get_by_id("sl-" + id);
+        grove::Element: r = b.child(1l);
+        call("slider_range", name + "\t" + r.child(1l).value_string() + "\t" + r.child(3l).value_string() + "\t" + r.child(5l).value_string());
+        b.set_attribute("data-key", "");
+    };
+    lo.on("change", apply);
+    hi.on("change", apply);
+    step.on("change", apply);
+    box.append_child(bounds);
+} end function update_slider
+
+function update_param(const string&: id, const string&: line) -> void {
+    grove::Element: box = grove::get_by_id("pt-" + id);
+    if (!box.exists()) then {
+        return;
+    }
+    auto: f = line.split("\t");
+    if (f.size() < 7l) then {
+        return;
+    }
+    string: key = f[1] + "|" + f[3] + "|" + f[4];
+    grove::Element: field = grove::get_by_id("f-" + id + "-at");
+    if (field.exists() && !field.focused() && field.value_string() != f[2]) then {
+        field.set_value_string(f[2]);
+    }
+    if (box.get_attribute("data-key") == key && box.child_count() > 0l) then {
+        grove::Element: s = grove::get_by_id("param-" + id);
+        if (!s.active() && !s.focused()) then {
+            s.set_value_float(std::io::parse_float<short float>(f[2]));
+        }
+        if (f[5] == "1") then {
+            grove::get_by_id("pplay-" + id).set_inner_text("\u{23F8}");
+        } else then {
+            grove::get_by_id("pplay-" + id).set_inner_text("\u{25B6}");
+        }
+        return;
+    }
+    clear(box);
+    box.set_attribute("data-key", key);
+    grove::Element: row = el("row", "slider-row", "");
+    grove::Element: play = el("button", "ghost small icon", "\u{25B6}");
+    play.set_attribute("id", "pplay-" + id);
+    play.set_attribute("title", "Move " + f[1] + " along the curve");
+    if (f[5] == "1") then {
+        play.set_inner_text("\u{23F8}");
+    }
+    play.on("click", [id](grove::Event&: e) -> void {
+        if (e.target().inner_text() == "\u{25B6}") then {
+            call("play_param", tab2(id, "1"));
+            e.target().set_inner_text("\u{23F8}");
+        } else then {
+            call("play_param", tab2(id, "0"));
+            e.target().set_inner_text("\u{25B6}");
+        }
+    });
+    grove::Element: s = grove::create_element("input_slider");
+    s.set_attribute("id", "param-" + id);
+    s.set_attribute("min", f[3]);
+    s.set_attribute("max", f[4]);
+    s.set_attribute("step", f[6]);
+    s.set_attribute("title", f[1] + " from " + f[3] + " to " + f[4]);
+    s.set_value_float(std::io::parse_float<short float>(f[2]));
+    s.on("input", [id](grove::Event&: e) -> void {
+        string: v = call("set_param", tab2(id, e.target().value_float().to_string()));
+        grove::Element: at = grove::get_by_id("f-" + id + "-at");
+        if (at.exists() && !v.empty() && v != "same") then {
+            at.set_value_string(v);
+        }
+    });
+    row.append_child(el("text", "field-label param-label", f[1]));
+    row.append_child(play);
+    row.append_child(s);
+    box.append_child(row);
+} end function update_param
+
+function update_status(const string&: id) -> void {
+    grove::Element: box = grove::get_by_id("st-" + id);
+    if (!box.exists()) then {
+        return;
+    }
+    clear(box);
+    bool: has_slider = false;
+    bool: has_param = false;
+    auto: rows = call("status", id).split("\n");
+    for (long int: i = 0l; i < rows.size(); i += 1l) {
+        auto: f = rows[i].split("\t");
+        if (f.size() < 2l) then {
+            continue;
+        }
+        string: what = f[0];
+        if (what == "slider") then {
+            has_slider = true;
+            update_slider(id, rows[i]);
+        } else if (what == "param") then {
+            has_param = true;
+            update_param(id, rows[i]);
+        } else if (what == "error") then {
+            box.append_child(el("p", "error", f[1]));
+        } else if (what == "note") then {
+            box.append_child(el("p", "note", f[1]));
+        } else if (what == "readout" && f.size() >= 3l) then {
+            grove::Element: block = el("column", "readout-block", "");
+            grove::Element: r = el("row", "readout", "");
+            r.append_child(el("p", "readout-label", f[1]));
+            if (!f[2].empty()) then {
+                r.append_child(el("p", "readout-value", f[2]));
+            }
+            block.append_child(r);
+            if (f.size() >= 4l && !f[3].empty()) then {
+                grove::Element: line = el("row", "readout-symbol-line", "");
+                line.append_child(el("math", "readout-symbol", f[3]));
+                block.append_child(line);
+            }
+            box.append_child(block);
+        } else if (what == "legend" && f.size() >= 4l) then {
+            if (!f[1].empty()) then {
+                box.append_child(el("p", "note", "colors: " + f[3] + " from " + f[1] + " to " + f[2]));
+            } else if (f[3] == "phase") then {
+                box.append_child(el("p", "note", "hue is the argument: red 0, yellow \u{3C0}/3, green 2\u{3C0}/3, cyan \u{3C0}, blue -2\u{3C0}/3, magenta -\u{3C0}/3"));
+            }
+        }
+    }
+    if (!has_param) then {
+        grove::Element: pt = grove::get_by_id("pt-" + id);
+        if (pt.exists() && pt.child_count() > 0l) then {
+            clear(pt);
+            pt.set_attribute("data-key", "");
+        }
+    }
+    if (!has_slider) then {
+        grove::Element: sl = grove::get_by_id("sl-" + id);
+        if (sl.exists() && sl.child_count() > 0l) then {
+            clear(sl);
+            sl.set_attribute("data-key", "");
+        }
+    }
+} end function update_status
+
+function update_wanted() -> void {
+    grove::Element: box = grove::get_by_id("wanted");
+    clear(box);
+    auto: names = call("wanted", "").split("\t");
+    long int: n = 0l;
+    grove::Element: row = el("row", "wanted-row", "");
+    row.append_child(el("text", "", "Add a slider for"));
+    for (long int: i = 0l; i < names.size(); i += 1l) {
+        string: name = names[i];
+        if (name.empty()) then {
+            continue;
+        }
+        n += 1l;
+        grove::Element: b = el("button", "small", name);
+        b.on("click", [name](grove::Event&: e) -> void {
+            call("add_slider", name);
+            build_items();
+        });
+        row.append_child(b);
+    }
+    if (n > 0l) then {
+        box.append_child(row);
+    }
+    show("wanted", n > 0l);
+} end function update_wanted
+
+function update_save_state() -> void {
+    if (call("dirty", "") == "1") then {
+        if (call("is_saved", "") == "1") then {
+            grove::get_by_id("save-state").set_inner_text("edited");
+        } else then {
+            grove::get_by_id("save-state").set_inner_text("not saved");
+        }
+    } else then {
+        grove::get_by_id("save-state").set_inner_text("saved");
+        if (call("is_saved", "") != "1") then {
+            grove::get_by_id("save-state").set_inner_text("");
+        }
+    }
+} end function update_save_state
+
+function refresh() -> void {
+    if (call("has_graph", "") != "1") then {
+        return;
+    }
+    string: rev = call("revision", "");
+    if (rev == last_revision) then {
+        return;
+    }
+    last_revision = rev;
+    string: all = call("items", "");
+    if (all != last_items) then {
+        build_items();
+        last_revision = rev;
+    }
+    auto: rows = all.split("\n");
+    for (long int: i = 0l; i < rows.size(); i += 1l) {
+        auto: f = rows[i].split("\t");
+        if (f.size() >= 2l) then {
+            update_status(f[0]);
+        }
+    }
+    update_wanted();
+    update_save_state();
+    grove::get_by_id("info").set_inner_text(call("info", ""));
+} end function refresh
+
+function show_settings() -> void {
+    building = true;
+    grove::set_choice("theme", call("setting", "theme"));
+    grove::set_choice("on-close", call("setting", "on-close"));
+    grove::set_choice("quality", call("setting", "quality"));
+    grove::get_by_id("c-bg").set_value_color(call("setting", "bg"));
+    grove::get_by_id("c-panel").set_value_color(call("setting", "panel"));
+    grove::get_by_id("c-text").set_value_color(call("setting", "text"));
+    grove::get_by_id("c-accent").set_value_color(call("setting", "accent"));
+    grove::get_by_id("precise-plot").set_value_bool(call("setting", "precise-plot") == "1");
+    grove::get_by_id("smooth-3d").set_value_bool(call("setting", "smooth-3d") == "1");
+    string: scale = call("setting", "ui-scale");
+    if (scale == "1.0" || scale == "1.00") then {
+        scale = "1";
+    }
+    grove::get_by_id("ui-scale").set_value_string(scale);
+    show("custom-colors", call("setting", "theme") == "custom");
+    grove::get_by_id("d-x-min").set_value_string(call("setting", "bound-2d-x-min"));
+    grove::get_by_id("d-x-max").set_value_string(call("setting", "bound-2d-x-max"));
+    grove::get_by_id("d-y-min").set_value_string(call("setting", "bound-2d-y-min"));
+    grove::get_by_id("d-y-max").set_value_string(call("setting", "bound-2d-y-max"));
+    grove::get_by_id("d-box").set_value_string(call("setting", "box-3d"));
+    grove::get_by_id("d-zbox").set_value_string(call("setting", "zbox-3d"));
+    build_number_types();
+    grove::get_by_id("about").set_inner_text("Arbor " + call("version", "") + ". Graphs are kept in " + call("data_dir", "") + ". Built with Grove, Bark, Walnut and Fizmo.");
+    building = false;
+    grove::get_by_id("settings").show_page();
+} end function show_settings
+
+function build_number_types() -> void {
+    grove::Element: list = grove::get_by_id("number-types");
+    clear(list);
+    string: current = call("setting", "number-type");
+    auto: rows = call("number_types", "").split("\n");
+    for (long int: i = 0l; i < rows.size(); i += 1l) {
+        auto: f = rows[i].split("\t");
+        if (f.size() < 4l) then {
+            continue;
+        }
+        string: id = f[0];
+        grove::Element: row = el("column", "type-row", "");
+        grove::Element: r = grove::create_element("input_radio");
+        r.set_attribute("name", "number-type");
+        r.set_attribute("value", id);
+        r.set_inner_text(f[1] + "  (" + f[2] + " digits)");
+        if (id == current) then {
+            r.set_attribute("checked", "");
+        }
+        r.on("change", [id](grove::Event&: e) -> void {
+            if (!building) then {
+                call("set_setting", tab2("number-type", id));
+                grove::get_by_id("quick-type").set_value_string(id);
+            }
+        });
+        row.append_child(r);
+        grove::Element: about = el("p", "type-about", f[3]);
+        about.set_attribute("id", "about-" + id);
+        row.append_child(about);
+        list.append_child(row);
+    }
+    grove::set_choice("number-type", current);
+} end function build_number_types
+
+function setting_from_radio(const string&: group) -> void {
+    if (building) then {
+        return;
+    }
+    call("set_setting", tab2(group, grove::choice(group)));
+} end function setting_from_radio
+
+function back_from_settings() -> void {
+    if (last_page == "graph" && call("has_graph", "") == "1") then {
+        grove::get_by_id("quick-type").set_value_string(call("setting", "number-type"));
+        grove::get_by_id("graph").show_page();
+        last_revision = "";
+        refresh();
+    } else then {
+        show_home();
+    }
+} end function back_from_settings
+
+grove::get_by_id("home-settings").on("click", [](grove::Event&: e) -> void {
+    show_settings();
+});
+grove::get_by_id("graph-settings").on("click", [](grove::Event&: e) -> void {
+    show_settings();
+});
+grove::get_by_id("settings-back").on("click", [](grove::Event&: e) -> void {
+    back_from_settings();
+});
+grove::get_by_id("home-open-file").on("click", [](grove::Event&: e) -> void {
+    string: path = pick_file("open", "Open a graph", "*.bark");
+    if (path.empty()) then {
+        return;
+    }
+    leave_graph([path]() -> void {
+        string: r = call("open_file", path);
+        if (r == "ok") then {
+            enter_graph();
+        } else then {
+            grove::popup_error("Can't open graph", r);
+        }
+    });
+});
+grove::get_by_id("recovery-open").on("click", [](grove::Event&: e) -> void {
+    call("restore", "");
+    enter_graph();
+});
+grove::get_by_id("recovery-drop").on("click", [](grove::Event&: e) -> void {
+    call("drop_recovery", "");
+    show("recovery", false);
+});
+
+grove::get_by_id("go-home").on("click", [](grove::Event&: e) -> void {
+    leave_graph([]() -> void {
+        show_home();
+    });
+});
+grove::get_by_id("save").on("click", [](grove::Event&: e) -> void {
+    call("set_title", grove::get_by_id("graph-title").value_string());
+    string: r = call("save", "");
+    if (r != "ok") then {
+        grove::popup_error("Couldn't save", r);
+    }
+    update_save_state();
+});
+grove::get_by_id("graph-title").on("change", [](grove::Event&: e) -> void {
+    string: t = call("set_title", e.target().value_string());
+    e.target().set_value_string(t);
+    update_save_state();
+});
+grove::get_by_id("undo").on("click", [](grove::Event&: e) -> void {
+    if (call("undo", "") == "1") then {
+        build_items();
+        sync_view();
+        build_bounds_bar();
+        grove::get_by_id("graph-title").set_value_string(call("title", ""));
+    }
+});
+grove::get_by_id("redo").on("click", [](grove::Event&: e) -> void {
+    if (call("redo", "") == "1") then {
+        build_items();
+        sync_view();
+        build_bounds_bar();
+        grove::get_by_id("graph-title").set_value_string(call("title", ""));
+    }
+});
+grove::get_by_id("quick-type").on("change", [](grove::Event&: e) -> void {
+    call("set_setting", tab2("number-type", e.target().value_string()));
+});
+grove::get_by_id("add-kind").on("change", [](grove::Event&: e) -> void {
+    string: kind = e.target().value_string();
+    if (kind.empty()) then {
+        return;
+    }
+    call("add_item", kind);
+    e.target().remove_attribute("value");
+    build_items();
+});
+
+function view_toggle(const string&: id, const string&: cmd) -> void {
+    grove::get_by_id(id).on("change", [cmd](grove::Event&: e) -> void {
+        if (building) then {
+            return;
+        }
+        if (e.target().value_bool()) then {
+            call("view", tab2(cmd, "1"));
+        } else then {
+            call("view", tab2(cmd, "0"));
+        }
+    });
+} end function view_toggle
+
+function setting_toggle(const string&: id, const string&: key) -> void {
+    building = true;
+    grove::get_by_id(id).set_value_bool(call("setting", key) != "0");
+    building = false;
+    grove::get_by_id(id).on("change", [key](grove::Event&: e) -> void {
+        if (building) then {
+            return;
+        }
+        if (e.target().value_bool()) then {
+            call("set_setting", tab2(key, "1"));
+        } else then {
+            call("set_setting", tab2(key, "0"));
+        }
+    });
+} end function setting_toggle
+
+function view_button(const string&: id, const string&: cmd) -> void {
+    grove::get_by_id(id).on("click", [cmd](grove::Event&: e) -> void {
+        call("view", cmd);
+    });
+} end function view_button
+
+view_toggle("v-grid", "grid");
+view_toggle("v-axes", "axes");
+view_toggle("v-labels", "labels");
+view_toggle("v-degrees", "degrees");
+view_toggle("v-perspective", "perspective");
+view_toggle("v-equal", "equal");
+setting_toggle("v-symbols", "readout-symbols");
+setting_toggle("v-values", "readout-values");
+view_button("v-top", "top");
+view_button("v-front", "front");
+view_button("v-zoom-in", "zoom_in");
+view_button("v-zoom-out", "zoom_out");
+grove::get_by_id("v-reset").on("click", [](grove::Event&: e) -> void {
+    call("view", "reset");
+    build_bounds_bar();
+});
+grove::get_by_id("v-bounds").on("click", [](grove::Event&: e) -> void {
+    grove::Element: bar = grove::get_by_id("bounds-bar");
+    if (bar.has_class("hidden")) then {
+        build_bounds_bar();
+        bar.remove_class("hidden");
+    } else then {
+        bar.add_class("hidden");
+    }
+});
+grove::get_by_id("home-library").on("click", [](grove::Event&: e) -> void {
+    show_library();
+});
+grove::get_by_id("graph-library").on("click", [](grove::Event&: e) -> void {
+    show_library();
+});
+grove::get_by_id("library-back").on("click", [](grove::Event&: e) -> void {
+    back_from_settings();
+});
+grove::get_by_id("library-search").on("input", [](grove::Event&: e) -> void {
+    build_library();
+});
+grove::get_by_id("library-search").on("change", [](grove::Event&: e) -> void {
+    build_library();
+});
+grove::get_by_id("v-export").on("click", [](grove::Event&: e) -> void {
+    string: path = pick_file("save", "Export picture", "*.png");
+    if (path.empty()) then {
+        return;
+    }
+    string: r = call("export_png", path);
+    if (r != "ok") then {
+        grove::popup_error("Couldn't export", r);
+    }
+});
+
+auto: theme_radios = grove::query_all("input_radio");
+for (long int: i = 0l; i < theme_radios.size(); i += 1l) {
+    grove::Element: r = theme_radios.at(i);
+    string: group = r.get_attribute("name");
+    if (group == "theme" || group == "on-close" || group == "quality") then {
+        r.on("change", [group](grove::Event&: e) -> void {
+            setting_from_radio(group);
+            if (group == "theme") then {
+                apply_theme();
+                show("custom-colors", grove::choice("theme") == "custom");
+            }
+        });
+    }
+}
+
+function color_setting(const string&: id, const string&: key) -> void {
+    grove::get_by_id(id).on("change", [key](grove::Event&: e) -> void {
+        if (building) then {
+            return;
+        }
+        call("set_setting", tab2(key, e.target().value_color()));
+        apply_theme();
+    });
+} end function color_setting
+
+color_setting("c-bg", "bg");
+color_setting("c-panel", "panel");
+color_setting("c-text", "text");
+color_setting("c-accent", "accent");
+
+function text_setting(const string&: id, const string&: key) -> void {
+    grove::get_by_id(id).on("change", [key](grove::Event&: e) -> void {
+        if (building) then {
+            return;
+        }
+        call("set_setting", tab2(key, e.target().value_string()));
+    });
+} end function text_setting
+
+text_setting("d-x-min", "bound-2d-x-min");
+text_setting("d-x-max", "bound-2d-x-max");
+text_setting("d-y-min", "bound-2d-y-min");
+text_setting("d-y-max", "bound-2d-y-max");
+text_setting("d-box", "box-3d");
+text_setting("d-zbox", "zbox-3d");
+
+grove::get_by_id("ui-scale").on("change", [](grove::Event&: e) -> void {
+    if (building) then {
+        return;
+    }
+    call("set_setting", tab2("ui-scale", e.target().value_string()));
+    apply_theme();
+});
+grove::get_by_id("precise-plot").on("change", [](grove::Event&: e) -> void {
+    if (building) then {
+        return;
+    }
+    if (e.target().value_bool()) then {
+        call("set_setting", tab2("precise-plot", "1"));
+    } else then {
+        call("set_setting", tab2("precise-plot", "0"));
+    }
+});
+grove::get_by_id("smooth-3d").on("change", [](grove::Event&: e) -> void {
+    if (building) then {
+        return;
+    }
+    if (e.target().value_bool()) then {
+        call("set_setting", tab2("smooth-3d", "1"));
+    } else then {
+        call("set_setting", tab2("smooth-3d", "0"));
+    }
+});
+grove::get_by_id("run-benchmark").on("click", [](grove::Event&: e) -> void {
+    auto: rows = call("benchmark", "").split("\n");
+    string: fastest = "";
+    for (long int: i = 0l; i < rows.size(); i += 1l) {
+        auto: f = rows[i].split("\t");
+        if (f.size() < 2l) then {
+            continue;
+        }
+        grove::Element: about = grove::get_by_id("about-" + f[0]);
+        if (about.exists()) then {
+            string: base = about.get_attribute("data-text");
+            if (base.empty()) then {
+                base = about.inner_text();
+                about.set_attribute("data-text", base);
+            }
+            about.set_inner_text(base + "  Measured here: " + f[1] + " per point.");
+        }
+    }
+    grove::get_by_id("benchmark-note").set_inner_text("Lower is faster. A 900 \u{D7} 600 color map is about half a million points.");
+});
+
+grove::main_window().on("close", [](grove::Event&: e) -> void {
+    if (call("has_graph", "") != "1" || call("dirty", "") != "1") then {
+        return;
+    }
+    string: mode = call("setting", "on-close");
+    if (mode == "save") then {
+        call("save", "");
+        return;
+    }
+    if (mode == "discard") then {
+        call("close", "");
+        return;
+    }
+    e.prevent_default();
+    leave_graph([]() -> void {
+        grove::quit();
+    });
+});
+
+grove::set_interval(120.0, []() -> void {
+    if (last_page == "graph") then {
+        refresh();
+        update_busy();
+    }
+});
+grove::get_by_id("busy-stop").on("click", [](grove::Event&: e) -> void {
+    call("stop_build", "");
+    stop_asked = true;
+});
+grove::get_by_id("busy-quit").on("click", [](grove::Event&: e) -> void {
+    call("quit_now", "");
+});
+
+apply_theme();
+build_quick_types();
+show_home();
