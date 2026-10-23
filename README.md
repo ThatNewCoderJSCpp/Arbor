@@ -10,7 +10,7 @@ cmake --build build --parallel
 ./build/bin/arbor
 ```
 
-CMake fetches Grove, which brings Fizmo and Walnut with it. Arbor needs Grove **v0.1.41** or newer (`<canvas>` came in v0.1.39, building on machines without a static C++ library in v0.1.40, and `<input_math>`, the live math input, in v0.1.41). The build compiles the window's script once and puts it inside `arbor`, so Arbor opens without compiling anything.
+CMake fetches Fizmo (`ARBOR_FIZMO_TAG`) and Grove, which brings Walnut with it. Arbor's PDE solver runs on Fizmo's numerics component, so it needs Fizmo **v0.2.38** or newer. Arbor needs Grove **v0.1.41** or newer (`<canvas>` came in v0.1.39, building on machines without a static C++ library in v0.1.40, and `<input_math>`, the live math input, in v0.1.41). The build compiles the window's script once and puts it inside `arbor`, so Arbor opens without compiling anything.
 
 | Target | |
 |---|---|
