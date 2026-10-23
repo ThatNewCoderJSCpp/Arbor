@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.18)
-project(arbor VERSION 0.1.1 DESCRIPTION "Arbor: a 2D and 3D graphing calculator built with Grove and Walnut" LANGUAGES C CXX)
+project(arbor VERSION 0.1.2 DESCRIPTION "Arbor: a 2D and 3D graphing calculator built with Grove and Walnut" LANGUAGES C CXX)
 
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
@@ -11,9 +11,16 @@ option(ARBOR_WITH_WALNUT "Build Walnut alongside Grove so Arbor's Walnut scripts
 option(ARBOR_BUILD_TESTS "Build the Arbor tests" ON)
 option(ARBOR_PACKAGE "Make release packages: arbor with its window and compiled script built in, linked so it runs without a compiler" OFF)
 option(ARBOR_BUNDLE "Run arbor-host --bundle as part of the build to make arbor with its window built in (turn off when cross-compiling, then bundle on the target)" ON)
-set(ARBOR_FIZMO_TAG "v0.2.39" CACHE STRING "Fizmo git tag to fetch (needs the numerics component)")
-set(ARBOR_GROVE_TAG "v0.1.49" CACHE STRING "Grove git tag to fetch")
-set(ARBOR_WALNUT_TAG "v0.1.34" CACHE STRING "Walnut git tag Grove fetches")
+set(ARBOR_FIZMO_TAG "v0.3.1" CACHE STRING "Fizmo git tag to fetch (needs the numerics component)")
+set(ARBOR_GROVE_TAG "v0.2.2" CACHE STRING "Grove git tag to fetch")
+set(ARBOR_WALNUT_TAG "v0.2.2" CACHE STRING "Walnut git tag Grove fetches")
+
+if(ANDROID)
+    set(ARBOR_WITH_WALNUT OFF CACHE BOOL "" FORCE)
+    set(ARBOR_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    set(ARBOR_PACKAGE OFF CACHE BOOL "" FORCE)
+    set(ARBOR_BUNDLE OFF CACHE BOOL "" FORCE)
+endif()
 
 if(NOT CMAKE_RUNTIME_OUTPUT_DIRECTORY)
     set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
@@ -102,6 +109,23 @@ endif()
 find_package(Threads REQUIRED)
 target_link_libraries(arbor_core PUBLIC Threads::Threads grove::core)
 arbor_warnings(arbor_core)
+
+if(ANDROID)
+    set(ARBOR_ANDROID_LIBS_DIR "${CMAKE_BINARY_DIR}/android-libs" CACHE PATH "Where the Android build puts <abi>/libarbor_android.so for grove build --runtime-lib")
+    add_library(arbor_android SHARED Tools/arbor.cpp Tools/arbor_dialog.cpp)
+    target_link_libraries(arbor_android PRIVATE arbor_core grove::runtime)
+    target_compile_definitions(arbor_android PRIVATE "ARBOR_VERSION_STRING=\"${PROJECT_VERSION}\"")
+    target_link_options(arbor_android PRIVATE
+        "LINKER:-z,max-page-size=16384"
+        "LINKER:-u,ANativeActivity_onCreate"
+        "LINKER:--gc-sections"
+        "$<$<NOT:$<CONFIG:Debug>>:LINKER:--strip-debug>"
+        "LINKER:--version-script=${grove_SOURCE_DIR}/cmake/android_exports.map")
+    set_property(TARGET arbor_android APPEND PROPERTY LINK_DEPENDS "${grove_SOURCE_DIR}/cmake/android_exports.map")
+    set_target_properties(arbor_android PROPERTIES LIBRARY_OUTPUT_DIRECTORY "${ARBOR_ANDROID_LIBS_DIR}/${ANDROID_ABI}")
+    arbor_warnings(arbor_android)
+    return()
+endif()
 
 set(ARBOR_BUNDLE_FLAGS "")
 if(ARBOR_PACKAGE)

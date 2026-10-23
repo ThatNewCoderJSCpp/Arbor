@@ -10,7 +10,7 @@ cmake --build build --parallel
 ./build/bin/arbor
 ```
 
-CMake fetches Fizmo (`ARBOR_FIZMO_TAG`) and Grove, which brings Walnut with it. Arbor's PDE solver runs on Fizmo's numerics component, so it needs Fizmo **v0.2.38** or newer. Arbor needs Grove **v0.1.41** or newer (`<canvas>` came in v0.1.39, building on machines without a static C++ library in v0.1.40, and `<input_math>`, the live math input, in v0.1.41). The build compiles the window's script once and puts it inside `arbor`, so Arbor opens without compiling anything.
+CMake fetches Fizmo (`ARBOR_FIZMO_TAG`) and Grove, which brings Walnut with it. Arbor's PDE solver runs on Fizmo's numerics component, so it needs Fizmo **v0.2.38** or newer (**v0.3.1** for Android). Arbor needs Grove **v0.1.41** or newer (**v0.2.1** for Android, **v0.2.2** for macOS) (`<canvas>` came in v0.1.39, building on machines without a static C++ library in v0.1.40, and `<input_math>`, the live math input, in v0.1.41). The build compiles the window's script once and puts it inside `arbor`, so Arbor opens without compiling anything.
 
 | Target | |
 |---|---|
@@ -27,9 +27,28 @@ Every build makes `build/bin/arbor` with its window and compiled Walnut script b
 
 ## Releases
 
-Pushing a `v*` tag runs `.github/workflows/release.yml`, which builds, tests and packages Arbor for Linux (x86_64, arm64) and Windows (x86_64 as `windows-ucrt64`, i686, and ARM64 as `windows-clangarm64`) and attaches the packages to the GitHub release. The Windows builds don't use MSYS2: Linux cross-compiles them with [llvm-mingw](https://github.com/mstorsjo/llvm-mingw) (`cmake/llvm-mingw.cmake`, with `-DARBOR_BUNDLE=OFF`) and runs the x86_64 tests under Wine, then a real Windows machine (x86_64 or ARM) runs the tests, bundles the window and its compiled script into `arbor.exe` with the `-with-compiler` package of the Walnut release `ARBOR_WALNUT_TAG` names, and packages it. The tag has to match the version in `CMakeLists.txt`.
+Pushing a `v*` tag runs `.github/workflows/release.yml`, which builds, tests and packages Arbor for Linux (x86_64, arm64), macOS (arm64, x86_64), Android (one APK for arm64 phones and x86_64) and Windows (x86_64 as `windows-ucrt64`, i686, and ARM64 as `windows-clangarm64`) and attaches the packages to the GitHub release. The Windows builds don't use MSYS2: Linux cross-compiles them with [llvm-mingw](https://github.com/mstorsjo/llvm-mingw) (`cmake/llvm-mingw.cmake`, with `-DARBOR_BUNDLE=OFF`) and runs the x86_64 tests under Wine, then a real Windows machine (x86_64 or ARM) runs the tests, bundles the window and its compiled script into `arbor.exe` with the `-with-compiler` package of the Walnut release `ARBOR_WALNUT_TAG` names, and packages it. The tag has to match the version in `CMakeLists.txt`.
 
 `-DARBOR_PACKAGE=ON` is what the workflow uses: it links the C++ runtime statically (into the app and its built-in script) so the packaged app runs on machines without a compiler. On Linux that needs the static C++ library, which Fedora keeps in `libstdc++-static`; ordinary builds don't need it. `cpack` then makes `Arbor-<version>-<platform>.tar.gz` (or `.zip` on Windows) with `arbor`, `arbor-render` and this README. 
+
+### macOS
+
+`Arbor-<version>-macos-arm64.tar.gz` is for Apple Silicon Macs and `macos-x86_64` for Intel Macs (macOS 11 or newer). Arbor uses a few libraries that macOS doesn't come with, so install them once with [Homebrew](https://brew.sh):
+
+```sh
+brew install freetype harfbuzz fontconfig jpeg-turbo openssl@3
+```
+
+The download isn't signed by Apple, so macOS refuses to open it at first. Remove the download flag once, then run it:
+
+```sh
+xattr -dr com.apple.quarantine Arbor-*
+./Arbor-*/arbor
+```
+
+### Android
+
+`Arbor-<version>-android.apk` runs on phones, tablets and Chromebooks. Copy it to the phone and open it there (Android asks once to allow installing apps from that source), or install it over USB with `adb install -r Arbor-*-android.apk`. The release workflow's `.github/scripts/android-apk.sh` builds it: a desktop `grove` and `walnut`, then `libarbor_android.so` and Grove's Android kit for each ABI with the Android NDK, then `grove build --target android` compiles the script for the phone and makes the APK. Signing uses the `ARBOR_KEYSTORE_BASE64`, `ARBOR_KEYSTORE_PASS` and `ARBOR_KEY_ALIAS` secrets when they're set; without them each build gets a new debug key, so an older install has to be uninstalled first.
 
 ## Using it
 
