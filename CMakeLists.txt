@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.18)
-project(arbor VERSION 0.1.4 DESCRIPTION "Arbor: a 2D and 3D graphing calculator built with Grove and Walnut" LANGUAGES C CXX)
+project(arbor VERSION 0.1.5 DESCRIPTION "Arbor: a 2D and 3D graphing calculator built with Grove and Walnut" LANGUAGES C CXX)
 
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
@@ -11,9 +11,9 @@ option(ARBOR_WITH_WALNUT "Build Walnut alongside Grove so Arbor's Walnut scripts
 option(ARBOR_BUILD_TESTS "Build the Arbor tests" ON)
 option(ARBOR_PACKAGE "Make release packages: arbor with its window and compiled script built in, linked so it runs without a compiler" OFF)
 option(ARBOR_BUNDLE "Run arbor-host --bundle as part of the build to make arbor with its window built in (turn off when cross-compiling, then bundle on the target)" ON)
-set(ARBOR_FIZMO_TAG "v0.3.3" CACHE STRING "Fizmo git tag to fetch (needs the numerics component)")
-set(ARBOR_GROVE_TAG "v0.2.4" CACHE STRING "Grove git tag to fetch")
-set(ARBOR_WALNUT_TAG "v0.2.5" CACHE STRING "Walnut git tag Grove fetches")
+set(ARBOR_FIZMO_TAG "v0.3.4" CACHE STRING "Fizmo git tag to fetch (needs the numerics component)")
+set(ARBOR_GROVE_TAG "v0.2.5" CACHE STRING "Grove git tag to fetch")
+set(ARBOR_WALNUT_TAG "v0.2.6" CACHE STRING "Walnut git tag Grove fetches")
 
 if(ANDROID)
     set(ARBOR_WITH_WALNUT OFF CACHE BOOL "" FORCE)
