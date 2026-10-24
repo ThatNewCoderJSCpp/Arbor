@@ -1,7 +1,15 @@
 cmake_minimum_required(VERSION 3.18)
 
-if(NOT FILES OR NOT LIB_DIR)
-    message(FATAL_ERROR "macos_bundle_libs.cmake needs -DFILES=<executables> and -DLIB_DIR=<folder>")
+if((NOT FILES AND NOT MODULE_DIR) OR NOT LIB_DIR)
+    message(FATAL_ERROR "macos_bundle_libs.cmake needs -DFILES=<executables> or -DMODULE_DIR=<script cache folder>, and -DLIB_DIR=<folder>")
+endif()
+
+if(MODULE_DIR)
+    file(GLOB _modules LIST_DIRECTORIES FALSE "${MODULE_DIR}/script*.so" "${MODULE_DIR}/script*.dylib")
+    if(NOT _modules)
+        message(FATAL_ERROR "macos_bundle_libs: no compiled scripts in ${MODULE_DIR}")
+    endif()
+    list(APPEND FILES ${_modules})
 endif()
 
 file(MAKE_DIRECTORY "${LIB_DIR}")

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.18)
-project(arbor VERSION 0.1.3 DESCRIPTION "Arbor: a 2D and 3D graphing calculator built with Grove and Walnut" LANGUAGES C CXX)
+project(arbor VERSION 0.1.4 DESCRIPTION "Arbor: a 2D and 3D graphing calculator built with Grove and Walnut" LANGUAGES C CXX)
 
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
@@ -11,9 +11,9 @@ option(ARBOR_WITH_WALNUT "Build Walnut alongside Grove so Arbor's Walnut scripts
 option(ARBOR_BUILD_TESTS "Build the Arbor tests" ON)
 option(ARBOR_PACKAGE "Make release packages: arbor with its window and compiled script built in, linked so it runs without a compiler" OFF)
 option(ARBOR_BUNDLE "Run arbor-host --bundle as part of the build to make arbor with its window built in (turn off when cross-compiling, then bundle on the target)" ON)
-set(ARBOR_FIZMO_TAG "v0.3.2" CACHE STRING "Fizmo git tag to fetch (needs the numerics component)")
-set(ARBOR_GROVE_TAG "v0.2.3" CACHE STRING "Grove git tag to fetch")
-set(ARBOR_WALNUT_TAG "v0.2.3" CACHE STRING "Walnut git tag Grove fetches")
+set(ARBOR_FIZMO_TAG "v0.3.3" CACHE STRING "Fizmo git tag to fetch (needs the numerics component)")
+set(ARBOR_GROVE_TAG "v0.2.4" CACHE STRING "Grove git tag to fetch")
+set(ARBOR_WALNUT_TAG "v0.2.5" CACHE STRING "Walnut git tag Grove fetches")
 
 if(ANDROID)
     set(ARBOR_WITH_WALNUT OFF CACHE BOOL "" FORCE)
@@ -151,8 +151,19 @@ if(TARGET walnut)
     list(APPEND ARBOR_BUNDLE_DEPENDS walnut)
 endif()
 if(ARBOR_BUNDLE)
+    set(ARBOR_BUNDLE_COMMAND ${CMAKE_COMMAND} -E env "ARBOR_UI_DIR=${CMAKE_CURRENT_SOURCE_DIR}/UI")
+    set(ARBOR_BUNDLE_FIXUP "")
+    if(APPLE AND ARBOR_PACKAGE)
+        set(ARBOR_SCRIPT_CACHE_DIR "${CMAKE_BINARY_DIR}/grove-cache")
+        list(APPEND ARBOR_BUNDLE_COMMAND "GROVE_CACHE_DIR=${ARBOR_SCRIPT_CACHE_DIR}")
+        set(ARBOR_BUNDLE_FIXUP
+            COMMAND ${CMAKE_COMMAND} "-DMODULE_DIR=${ARBOR_SCRIPT_CACHE_DIR}/arbor" "-DLIB_DIR=${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/lib"
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/macos_bundle_libs.cmake"
+            COMMAND ${ARBOR_BUNDLE_COMMAND} $<TARGET_FILE:arbor-host> --bundle "${ARBOR_BUNDLED}" ${ARBOR_BUNDLE_FLAGS})
+    endif()
     add_custom_command(OUTPUT "${ARBOR_BUNDLED}"
-        COMMAND ${CMAKE_COMMAND} -E env "ARBOR_UI_DIR=${CMAKE_CURRENT_SOURCE_DIR}/UI" $<TARGET_FILE:arbor-host> --bundle "${ARBOR_BUNDLED}" ${ARBOR_BUNDLE_FLAGS}
+        COMMAND ${ARBOR_BUNDLE_COMMAND} $<TARGET_FILE:arbor-host> --bundle "${ARBOR_BUNDLED}" ${ARBOR_BUNDLE_FLAGS}
+        ${ARBOR_BUNDLE_FIXUP}
         DEPENDS ${ARBOR_BUNDLE_DEPENDS}
             "${CMAKE_CURRENT_SOURCE_DIR}/UI/arbor.grove"
             "${CMAKE_CURRENT_SOURCE_DIR}/UI/arbor.bark"
@@ -214,6 +225,9 @@ if(ARBOR_PACKAGE)
                 VERBATIM)
         endforeach()
         add_dependencies(arbor-render arbor-host)
+        if(ARBOR_BUNDLE)
+            add_dependencies(arbor arbor-render)
+        endif()
         install(DIRECTORY "${_arbor_mac_libs}/" DESTINATION lib COMPONENT arbor USE_SOURCE_PERMISSIONS)
     else()
         foreach(t arbor-host arbor-render)
