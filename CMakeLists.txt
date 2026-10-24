@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.18)
-project(arbor VERSION 0.1.2 DESCRIPTION "Arbor: a 2D and 3D graphing calculator built with Grove and Walnut" LANGUAGES C CXX)
+project(arbor VERSION 0.1.3 DESCRIPTION "Arbor: a 2D and 3D graphing calculator built with Grove and Walnut" LANGUAGES C CXX)
 
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
@@ -11,9 +11,9 @@ option(ARBOR_WITH_WALNUT "Build Walnut alongside Grove so Arbor's Walnut scripts
 option(ARBOR_BUILD_TESTS "Build the Arbor tests" ON)
 option(ARBOR_PACKAGE "Make release packages: arbor with its window and compiled script built in, linked so it runs without a compiler" OFF)
 option(ARBOR_BUNDLE "Run arbor-host --bundle as part of the build to make arbor with its window built in (turn off when cross-compiling, then bundle on the target)" ON)
-set(ARBOR_FIZMO_TAG "v0.3.1" CACHE STRING "Fizmo git tag to fetch (needs the numerics component)")
-set(ARBOR_GROVE_TAG "v0.2.2" CACHE STRING "Grove git tag to fetch")
-set(ARBOR_WALNUT_TAG "v0.2.2" CACHE STRING "Walnut git tag Grove fetches")
+set(ARBOR_FIZMO_TAG "v0.3.2" CACHE STRING "Fizmo git tag to fetch (needs the numerics component)")
+set(ARBOR_GROVE_TAG "v0.2.3" CACHE STRING "Grove git tag to fetch")
+set(ARBOR_WALNUT_TAG "v0.2.3" CACHE STRING "Walnut git tag Grove fetches")
 
 if(ANDROID)
     set(ARBOR_WITH_WALNUT OFF CACHE BOOL "" FORCE)
@@ -205,6 +205,16 @@ if(ARBOR_PACKAGE)
     elseif(APPLE)
         set(_arbor_platform macos-${_arbor_arch})
         set(CPACK_GENERATOR TGZ)
+        set(_arbor_mac_libs "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/lib")
+        foreach(t arbor-host arbor-render)
+            add_custom_command(TARGET ${t} POST_BUILD
+                COMMAND ${CMAKE_COMMAND} "-DFILES=$<TARGET_FILE:${t}>" "-DLIB_DIR=${_arbor_mac_libs}"
+                    -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/macos_bundle_libs.cmake"
+                COMMENT "Copying the libraries ${t} needs into ${_arbor_mac_libs}"
+                VERBATIM)
+        endforeach()
+        add_dependencies(arbor-render arbor-host)
+        install(DIRECTORY "${_arbor_mac_libs}/" DESTINATION lib COMPONENT arbor USE_SOURCE_PERMISSIONS)
     else()
         foreach(t arbor-host arbor-render)
             target_link_options(${t} PRIVATE -static-libstdc++ -static-libgcc)

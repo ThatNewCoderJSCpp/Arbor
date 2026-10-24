@@ -33,11 +33,7 @@ Pushing a `v*` tag runs `.github/workflows/release.yml`, which builds, tests and
 
 ### macOS
 
-`Arbor-<version>-macos-arm64.tar.gz` is for Apple Silicon Macs and `macos-x86_64` for Intel Macs (macOS 11 or newer). Arbor uses a few libraries that macOS doesn't come with, so install them once with [Homebrew](https://brew.sh):
-
-```sh
-brew install freetype harfbuzz fontconfig jpeg-turbo openssl@3
-```
+`Arbor-<version>-macos-arm64.tar.gz` is for Apple Silicon Macs and `macos-x86_64` for Intel Macs (macOS 11 or newer). Everything Arbor needs that macOS doesn't come with (FreeType, HarfBuzz, fontconfig, libjpeg and what they use) is in the package's `lib` folder, so nothing else has to be installed. With `-DARBOR_PACKAGE=ON` on macOS, the build copies those libraries out of Homebrew into `build/bin/lib` (`cmake/macos_bundle_libs.cmake`) and points the programs at them.
 
 The download isn't signed by Apple, so macOS refuses to open it at first. Remove the download flag once, then run it:
 

@@ -9,6 +9,8 @@
 #include "eval_impl.hpp"
 
 #include <charconv>
+#include <cstdio>
+#include <cstdlib>
 #include <system_error>
 
 namespace arbor {
@@ -31,6 +33,30 @@ double fizmo_to_double(const F& v) {
     return v.is_negative() ? -magnitude : magnitude;
 }
 
+#if defined(__APPLE__)
+inline bool shortest_decimal(double v, char* buf, std::size_t size, std::size_t& length) {
+    int precision = 0;
+    char sci[40];
+    for (int p = 1; p <= 17 && precision == 0; ++p) {
+        const int n = std::snprintf(sci, sizeof(sci), "%.*e", p - 1, v);
+        if (n > 0 && n < static_cast<int>(sizeof(sci)) && std::strtod(sci, nullptr) == v) precision = p;
+    }
+    if (precision == 0) return false;
+    const char* e = sci;
+    while (*e && *e != 'e') ++e;
+    const int x = std::atoi(e + 1);
+    const int ax = x < 0 ? -x : x;
+    const int fixed_digits = x >= 0 ? (precision > x + 1 ? precision : x + 1) : precision - x;
+    const int fixed_chars = fixed_digits + ((x >= 0 ? precision > x + 1 : true) ? 1 : 0);
+    const int sci_chars = precision + (precision > 1 ? 1 : 0) + 2 + (ax >= 100 ? 3 : 2);
+    if ((fixed_chars <= sci_chars ? fixed_digits : precision) > 15) return false;
+    const int n = std::snprintf(buf, size, "%.*g", precision, v);
+    if (n <= 0 || n >= static_cast<int>(size)) return false;
+    length = static_cast<std::size_t>(n);
+    return true;
+}
+#endif
+
 template <class F>
 struct FizmoNum {
     using T = F;
@@ -39,12 +65,18 @@ struct FizmoNum {
         if (std::isinf(v)) return v > 0 ? T::positive_infinity() : T::negative_infinity();
         if (F::mantissa_bits <= 53 || v == 0.0 || (std::fabs(v) < 9007199254740992.0 && std::floor(v) == v)) return T(v);
         char buf[40];
+#if defined(__APPLE__)
+        std::size_t length = 0;
+        if (!shortest_decimal(v, buf, sizeof(buf), length)) return T(v);
+        T parsed(std::string(buf, length));
+#else
         const auto r = std::to_chars(buf, buf + sizeof(buf), v);
         if (r.ec != std::errc()) return T(v);
         int digits = 0;
         for (const char* q = buf; q != r.ptr && *q != 'e' && *q != 'E'; ++q) digits += *q >= '0' && *q <= '9' ? 1 : 0;
         if (digits > 15) return T(v);
         T parsed(std::string(buf, r.ptr));
+#endif
         if (parsed.is_unordered()) return T(v);
         return parsed;
     }
