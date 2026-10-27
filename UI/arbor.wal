@@ -8,6 +8,7 @@ string: last_items = "";
 string: last_page = "home";
 bool: building = false;
 string: last_eq_id = "";
+string: last_eq_box = "";
 string: lib_category = "All";
 bool: stop_asked = false;
 
@@ -29,6 +30,12 @@ function build_add_menu() -> void;
 function sync_view() -> void;
 function build_items() -> void;
 function make_card(const string&: id) -> grove::Element;
+function vec_split(const string&: raw) -> string;
+function vec_hint(const string&: hint) -> string;
+function vec_box_id(const string&: id, const string&: field, long int: k) -> string;
+function vec_preview_text(const string&: id, const string&: field, long int: n) -> string;
+function vec_commit(const string&: id, const string&: field, long int: n) -> void;
+function make_vector_editor(const string&: id, const string&: field, const string&: value, const string&: hint, bool: is_eq) -> grove::Element;
 function update_slider(const string&: id, const string&: line) -> void;
 function update_param(const string&: id, const string&: line) -> void;
 function update_status(const string&: id) -> void;
@@ -393,6 +400,193 @@ function build_items() -> void {
     last_revision = "";
 } end function build_items
 
+function vec_split(const string&: raw) -> string {
+    string: s = raw.trim();
+    if (s.length() < 2l) then {
+        return "";
+    }
+    if ((s.starts_with("<") && s.ends_with(">")) || (s.starts_with("\u{27E8}") && s.ends_with("\u{27E9}"))) then {
+        s = s.substr(1l, s.length() - 2l);
+    } else then {
+        return "";
+    }
+    string: out = "";
+    string: cur = "";
+    long int: depth = 0l;
+    long int: parts = 1l;
+    for (long int: i = 0l; i < s.length(); i += 1l) {
+        string: c = s.substr(i, 1l);
+        if (c == "(" || c == "[" || c == "{") then {
+            depth += 1l;
+        } else if (c == ")" || c == "]" || c == "}") then {
+            depth -= 1l;
+        }
+        if (c == "," && depth == 0l) then {
+            out = out + cur.trim() + "\t";
+            cur = "";
+            parts += 1l;
+        } else then {
+            cur = cur + c;
+        }
+    }
+    out = out + cur.trim();
+    if (parts < 2l) then {
+        return "";
+    }
+    return out;
+} end function vec_split
+
+function vec_hint(const string&: hint) -> string {
+    string: h = hint.trim();
+    if (!h.starts_with("\u{27E8}")) then {
+        return "";
+    }
+    long int: close = h.find("\u{27E9}");
+    if (close < 1l) then {
+        return "";
+    }
+    return vec_split(h.substr(0l, close + 1l));
+} end function vec_hint
+
+function vec_box_id(const string&: id, const string&: field, long int: k) -> string {
+    return "vc-" + id + "-" + field + "-" + k.to_string();
+} end function vec_box_id
+
+function vec_preview_text(const string&: id, const string&: field, long int: n) -> string {
+    string: out = "\u{27E8}";
+    for (long int: k = 0l; k < n; k += 1l) {
+        string: v = grove::get_by_id(vec_box_id(id, field, k)).value_string().trim();
+        if (v.empty()) then {
+            v = "\u{25A1}";
+        }
+        if (k > 0l) then {
+            out = out + ", ";
+        }
+        out = out + v;
+    }
+    return out + "\u{27E9}";
+} end function vec_preview_text
+
+function vec_commit(const string&: id, const string&: field, long int: n) -> void {
+    string: joined = "";
+    bool: has_any = false;
+    bool: pasted = false;
+    for (long int: k = 0l; k < n; k += 1l) {
+        string: v = grove::get_by_id(vec_box_id(id, field, k)).value_string().trim();
+        string: inner = vec_split(v);
+        if (!inner.empty()) then {
+            joined = std::strings::replace(inner, "\t", ", ");
+            has_any = true;
+            pasted = true;
+            break;
+        }
+        if (!v.empty()) then {
+            has_any = true;
+        }
+        if (k > 0l) then {
+            joined = joined + ", ";
+        }
+        joined = joined + v;
+    }
+    string: value = "";
+    if (has_any) then {
+        value = "<" + joined + ">";
+    }
+    call("set_field", tab3(id, field, value));
+    grove::Element: preview = grove::get_by_id("vp-" + id + "-" + field);
+    if (preview.exists()) then {
+        preview.set_value_string(vec_preview_text(id, field, n));
+    }
+    if (pasted) then {
+        last_items = "";
+        last_revision = "";
+    }
+} end function vec_commit
+
+function make_vector_editor(const string&: id, const string&: field, const string&: value, const string&: hint, bool: is_eq) -> grove::Element {
+    auto: names = vec_hint(hint).split("\t");
+    string: src = vec_split(value);
+    if (src.empty()) then {
+        src = value.trim();
+    }
+    auto: parts = src.split("\t");
+    long int: n = names.size();
+    if (parts.size() > n) then {
+        n = parts.size();
+    }
+    grove::Element: editor = el("column", "vec-editor", "");
+    editor.set_attribute("id", "ve-" + id + "-" + field);
+    for (long int: k = 0l; k < n; k += 1l) {
+        string: name = "";
+        if (k < names.size()) then {
+            name = names[k];
+        }
+        string: label = name;
+        long int: paren = name.find("(");
+        if (paren > 0l) then {
+            label = name.substr(0l, paren);
+        }
+        if (label.empty()) then {
+            label = (k + 1l).to_string();
+        }
+        grove::Element: row = el("row", "vec-comp", "");
+        row.append_child(el("math", "vec-label", label));
+        grove::Element: input = grove::create_element("input_math");
+        if (k < parts.size()) then {
+            input.set_value_string(parts[k]);
+        }
+        if (!name.empty()) then {
+            input.set_attribute("placeholder", name);
+            input.set_attribute("title", name);
+        }
+        string: box = vec_box_id(id, field, k);
+        input.set_attribute("class", "vec-input");
+        input.set_attribute("id", box);
+        input.set_attribute("data-item", id);
+        input.set_attribute("data-field", field);
+        input.set_attribute("data-part", k.to_string());
+        input.set_attribute("data-parts", n.to_string());
+        input.on("change", [id, field, n](grove::Event&: e) -> void {
+            vec_commit(id, field, n);
+        });
+        if (is_eq) then {
+            input.on("focus", [id, box](grove::Event&: e) -> void {
+                last_eq_id = id;
+                last_eq_box = box;
+            });
+            input.on("click", [id, box](grove::Event&: e) -> void {
+                last_eq_id = id;
+                last_eq_box = box;
+            });
+            input.on("input", [id, box](grove::Event&: e) -> void {
+                last_eq_id = id;
+                last_eq_box = box;
+            });
+        }
+        row.append_child(input);
+        editor.append_child(row);
+    }
+    string: shown = "\u{27E8}";
+    for (long int: k = 0l; k < n; k += 1l) {
+        string: v = "\u{25A1}";
+        if (k < parts.size() && !parts[k].trim().empty()) then {
+            v = parts[k].trim();
+        }
+        if (k > 0l) then {
+            shown = shown + ", ";
+        }
+        shown = shown + v;
+    }
+    grove::Element: preview = grove::create_element("input_math");
+    preview.set_value_string(shown + "\u{27E9}");
+    preview.set_attribute("class", "vec-preview");
+    preview.set_attribute("readonly", "true");
+    preview.set_attribute("disabled", "true");
+    preview.set_attribute("id", "vp-" + id + "-" + field);
+    editor.append_child(preview);
+    return editor;
+} end function make_vector_editor
+
 function make_card(const string&: id) -> grove::Element {
     auto: lines = call("item", id).split("\n");
     auto: head = lines[0].split("\t");
@@ -566,6 +760,7 @@ function make_card(const string&: id) -> grove::Element {
             input.set_attribute("data-item", id);
             input.set_attribute("data-field", field);
             input.set_attribute("id", "f-" + id + "-" + field);
+            bool: vec = tag == "input_math" && f.size() > 4l && !vec_hint(f[4]).empty();
             if (f.size() > 5l && f[5] == "1") then {
                 seen_eq = true;
                 input.set_attribute("class", "eq");
@@ -585,7 +780,12 @@ function make_card(const string&: id) -> grove::Element {
                 if (branched) then {
                     row.add_class("with-branch");
                 }
-                row.append_child(input);
+                if (vec) then {
+                    row.add_class("vec-eq-row");
+                    row.append_child(make_vector_editor(id, field, f[3], f[4], true));
+                } else then {
+                    row.append_child(input);
+                }
                 grove::Element: bb = el("row", "branch", "");
                 bb.set_attribute("id", "branch-" + id);
                 bb.set_attribute("title", "Which branch of the many-valued functions (\u{221A}, log, arcsin, z^a, ...) to draw: 0 is the principal one, 1, 2, -1, ... the others");
@@ -611,7 +811,12 @@ function make_card(const string&: id) -> grove::Element {
                 input.set_attribute("class", "field-input wide-input");
                 grove::Element: wbox = el("row", "field wide-field", "");
                 wbox.append_child(el("text", "field-label", f[2]));
-                wbox.append_child(input);
+                if (vec) then {
+                    wbox.add_class("vec-field");
+                    wbox.append_child(make_vector_editor(id, field, f[3], f[4], false));
+                } else then {
+                    wbox.append_child(input);
+                }
                 card.append_child(wbox);
             } else then {
                 input.set_attribute("class", "field-input");
@@ -983,8 +1188,25 @@ function insert_into_eq(const string&: piece) -> void {
     if (call("has_graph", "") != "1" || last_eq_id.empty()) then {
         return;
     }
+    grove::Element: box = grove::get_by_id(last_eq_box);
+    if (!last_eq_box.empty() && box.exists() && last_eq_box.starts_with("vc-" + last_eq_id + "-eq-")) then {
+        box.set_value_string(box.value_string() + piece);
+        long int: n = 0l;
+        while (grove::get_by_id(vec_box_id(last_eq_id, "eq", n)).exists()) {
+            n += 1l;
+        }
+        vec_commit(last_eq_id, "eq", n);
+        back_from_settings();
+        grove::get_by_id(last_eq_box).focus();
+        return;
+    }
     grove::Element: input = grove::get_by_id("eqin-" + last_eq_id);
     if (!input.exists()) then {
+        string: first = vec_box_id(last_eq_id, "eq", 0l);
+        if (grove::get_by_id(first).exists()) then {
+            last_eq_box = first;
+            insert_into_eq(piece);
+        }
         return;
     }
     string: value = input.value_string() + piece;

@@ -858,3 +858,50 @@ input_math.field-input {
 .busy-row {
     gap: 6px;
 }
+
+.vec-editor {
+    flex: 1;
+    gap: 2px;
+    padding: 3px 0 3px 4px;
+}
+
+.vec-comp {
+    gap: 4px;
+    align-items: center;
+    width: 100%;
+}
+
+.vec-label {
+    width: 18px;
+    min-width: 18px;
+    flex: 0;
+    color: var(--muted);
+    font-size: 13px;
+}
+
+.vec-input {
+    flex: 1;
+    min-width: 40px;
+}
+
+.eq-row .vec-input {
+    border-width: 0 0 1px 0;
+    border-color: var(--line);
+    background: var(--panel);
+    font-size: 16px;
+}
+
+input_math.vec-preview {
+    width: 100%;
+    color: var(--muted);
+    font-size: 12px;
+    border-width: 0;
+    border-color: var(--panel);
+    background: var(--panel);
+    padding: 0 0 0 18px;
+    opacity: 1;
+}
+
+.wide-field.vec-field {
+    align-items: flex-start;
+}

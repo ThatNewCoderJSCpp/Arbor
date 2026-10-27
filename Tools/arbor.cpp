@@ -447,10 +447,27 @@ public:
             const std::string field = e.target->attribute_or("data-field", "");
             if (id.empty() || field.empty()) return;
             Item* it = m_graph->find_item(id);
-            if (!it || it->field(field) == e.edit_text) return;
+            if (!it) return;
+            std::string value = e.edit_text;
+            const std::string part = e.target->attribute_or("data-part", "");
+            if (!part.empty()) {
+                std::vector<std::string> comps = vector_parts(it->field(field));
+                const std::size_t k = static_cast<std::size_t>(std::max(0, std::atoi(part.c_str())));
+                const std::size_t n = static_cast<std::size_t>(std::max(0, std::atoi(e.target->attribute_or("data-parts", "0").c_str())));
+                if (comps.size() < std::max(n, k + 1)) comps.resize(std::max(n, k + 1));
+                comps[k] = trimmed(e.edit_text);
+                const std::vector<std::string> whole = vector_parts(comps[k]);
+                if (whole.size() >= 2 && (comps[k].front() == '<' || comps[k].compare(0, 3, "\xE2\x9F\xA8") == 0)) comps = whole;
+                value = join_vector(comps);
+                if (grove::Node* p = m_doc.find_by_id("vp-" + id + "-" + field)) {
+                    grove::set_input_string(m_doc, *p, vector_preview(comps));
+                    m_doc.touch();
+                }
+            }
+            if (it->field(field) == value) return;
             snapshot("field:" + id + ":" + field);
-            it->fields[field] = e.edit_text;
-            if (field == "eq") update_eq_view(*it, e.edit_text);
+            it->fields[field] = value;
+            if (field == "eq") update_eq_view(*it, value);
             if (it->kind == "define" && field == "eq") update_eq_views();
             touched(true);
         });
@@ -1337,6 +1354,58 @@ private:
             out += ch;
         }
         return out;
+    }
+
+    static std::string trimmed(const std::string& text) {
+        const std::size_t a = text.find_first_not_of(" \t\r\n");
+        if (a == std::string::npos) return std::string();
+        const std::size_t b = text.find_last_not_of(" \t\r\n");
+        return text.substr(a, b - a + 1);
+    }
+
+    static std::vector<std::string> vector_parts(const std::string& text) {
+        std::string s = trimmed(text);
+        std::vector<std::string> out;
+        const std::string open = "\xE2\x9F\xA8";
+        const std::string close = "\xE2\x9F\xA9";
+        if (s.size() >= 2 && s.front() == '<' && s.back() == '>') {
+            s = s.substr(1, s.size() - 2);
+        } else if (s.size() >= 6 && s.compare(0, 3, open) == 0 && s.compare(s.size() - 3, 3, close) == 0) {
+            s = s.substr(3, s.size() - 6);
+        } else {
+            if (!s.empty()) out.push_back(s);
+            return out;
+        }
+        int depth = 0;
+        std::string cur;
+        for (char c : s) {
+            if (c == '(' || c == '[' || c == '{') ++depth;
+            else if (c == ')' || c == ']' || c == '}') --depth;
+            if (c == ',' && depth == 0) {
+                out.push_back(trimmed(cur));
+                cur.clear();
+            } else {
+                cur += c;
+            }
+        }
+        out.push_back(trimmed(cur));
+        return out;
+    }
+
+    static std::string join_vector(const std::vector<std::string>& parts) {
+        bool any = false;
+        std::string out;
+        for (std::size_t i = 0; i < parts.size(); ++i) {
+            if (!parts[i].empty()) any = true;
+            out += (i ? ", " : "") + parts[i];
+        }
+        return any ? "<" + out + ">" : std::string();
+    }
+
+    static std::string vector_preview(const std::vector<std::string>& parts) {
+        std::string out = "\xE2\x9F\xA8";
+        for (std::size_t i = 0; i < parts.size(); ++i) out += (i ? ", " : "") + (parts[i].empty() ? std::string("\xE2\x96\xA1") : parts[i]);
+        return out + "\xE2\x9F\xA9";
     }
 
     static bool math_field(const std::string& id) {
