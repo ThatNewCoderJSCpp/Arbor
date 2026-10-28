@@ -91,6 +91,29 @@ struct Compiler {
         return static_cast<std::uint32_t>(p.constants.size() - 1);
     }
 
+    bool emit_reduction(const ExprPtr& e) {
+        const std::string& n = e->text;
+        Reduction r;
+        r.kind = n == "sum" ? ReduceKind::Sum : n == "prod" ? ReduceKind::Prod : n == "integral" ? ReduceKind::Integral : n == "maximum" ? ReduceKind::Max : n == "minimum" ? ReduceKind::Min : n == "argmax" ? ReduceKind::ArgMax : ReduceKind::ArgMin;
+        const std::string var = e->args[1]->text;
+        std::vector<std::string> slots = p.slots;
+        for (std::string& s : slots) {
+            if (s == var) s = "\x01shadowed";
+        }
+        slots.push_back(var);
+        std::string err;
+        Program body = compile(e->args[0], slots, p.complex, err);
+        if (!body.valid) {
+            error = err.empty() ? "the expression inside " + n + " can't be worked out" : err;
+            return false;
+        }
+        r.body = std::make_shared<Program>(std::move(body));
+        p.reductions.push_back(r);
+        if (!emit(e->args[2]) || !emit(e->args[3])) return false;
+        push(Instr{ Code::Reduce, Fn::Sin, static_cast<std::uint32_t>(p.reductions.size() - 1) }, -1);
+        return true;
+    }
+
     bool emit(const ExprPtr& e) {
         if (!e) {
             error = "missing expression";
@@ -153,6 +176,7 @@ struct Compiler {
                 return true;
             }
             case Op::Call: {
+                if (is_bound_call(e)) return emit_reduction(e);
                 if (e->text == "if" && e->args.size() == 2) {
                     if (!emit(e->args[0]) || !emit(e->args[1])) return false;
                     push(Instr{ Code::Const, Fn::Sin, constant(std::nan(""), std::string()) }, 1);
@@ -236,7 +260,10 @@ Program compile(const ExprPtr& e, const std::vector<std::string>& slots, bool co
     p.branch = t_compile_branch;
     Compiler c{ p, error };
     p.valid = c.emit(e);
-    if (!p.valid) p.code.clear();
+    if (!p.valid) {
+        p.code.clear();
+        p.reductions.clear();
+    }
     return p;
 }
 

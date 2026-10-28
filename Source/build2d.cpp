@@ -167,6 +167,380 @@ void analyze_curve2(const Curve2Analysis& a, double t0, const Item& item, Ctx& c
 
 } // namespace
 
+std::string nice_number(double v) {
+    if (!std::isfinite(v)) return format_double(v, 8);
+    if (std::fabs(v) < 1e-12) return "0";
+    const double r = std::round(v);
+    if (std::fabs(v - r) < 1e-9 * std::max(1.0, std::fabs(v))) return format_double(r, 15);
+    const double pi = 3.14159265358979323846;
+    for (int q = 1; q <= 12; ++q) {
+        const double p = std::round(v * q / pi);
+        if (p != 0.0 && std::fabs(v - p * pi / q) < 1e-9 * std::max(1.0, std::fabs(v))) {
+            std::string num = p == 1.0 ? "\xCF\x80" : p == -1.0 ? "-\xCF\x80" : format_double(p, 15) + "\xCF\x80";
+            return q == 1 ? num : num + "/" + std::to_string(q);
+        }
+    }
+    for (int q = 2; q <= 12; ++q) {
+        const double p = std::round(v * q);
+        if (std::fabs(v - p / q) < 1e-9 * std::max(1.0, std::fabs(v))) return format_double(p, 15) + "/" + std::to_string(q);
+    }
+    return format_double(v, 8);
+}
+
+bool grows_toward(Func& f, double c, double side, double width) {
+    double prev = -1.0;
+    double first = 0.0;
+    const double steps[3] = { 1e-4, 1e-7, 1e-10 };
+    for (int k = 0; k < 3; ++k) {
+        const double d = width * steps[k];
+        const double v = f.at({ c + side * d });
+        if (!std::isfinite(v)) return k > 0;
+        const double m = std::fabs(v);
+        if (k == 0) first = m;
+        else if (m <= 1.3 * prev) return false;
+        prev = m;
+    }
+    return prev > 2.0 * first + 1e-9;
+}
+
+double toward_sign(Func& f, double c, double side, double width) {
+    const double v = f.at({ c + side * width * 1e-10 });
+    return std::isfinite(v) ? (v > 0 ? 1.0 : -1.0) : 0.0;
+}
+
+struct Vertical {
+    double at;
+    bool up;
+    bool down;
+};
+
+std::vector<Vertical> vertical_asymptotes(Func& f, double a, double b, double view) {
+    std::vector<Vertical> out;
+    if (!(b > a)) return out;
+    const double width = b - a;
+    const std::size_t n = 1600;
+    const std::vector<double> ts = linspace(a, b, n + 1);
+    const std::vector<double> vs = f.map1(ts);
+    auto record = [&](double c) {
+        for (const Vertical& v : out) {
+            if (std::fabs(v.at - c) < 1e-6 * width) return;
+        }
+        const bool left = grows_toward(f, c, -1.0, width);
+        const bool right = grows_toward(f, c, 1.0, width);
+        if (!left && !right) return;
+        Vertical v{ c, false, false };
+        for (double side : { -1.0, 1.0 }) {
+            if (!(side < 0 ? left : right)) continue;
+            const double sg = toward_sign(f, c, side, width);
+            if (sg > 0) v.up = true;
+            if (sg < 0) v.down = true;
+        }
+        out.push_back(v);
+    };
+    for (std::size_t i = 0; i + 1 < ts.size() && out.size() < 200; ++i) {
+        double ta = ts[i];
+        double tb = ts[i + 1];
+        double fa = vs[i];
+        double fb = vs[i + 1];
+        const bool A = std::isfinite(fa);
+        const bool B = std::isfinite(fb);
+        if (!A && !B) continue;
+        if (A != B) {
+            for (int k = 0; k < 70; ++k) {
+                const double tm = 0.5 * (ta + tb);
+                if (tm <= ta || tm >= tb) break;
+                const double fm = f.at({ tm });
+                if (std::isfinite(fm) == A) ta = tm;
+                else tb = tm;
+            }
+            record(A ? tb : ta);
+            continue;
+        }
+        if (std::fabs(fb - fa) < 0.5 * view) continue;
+        double jump = std::fabs(fb - fa);
+        int stuck = 0;
+        bool broke = false;
+        for (int k = 0; k < 90; ++k) {
+            const double tm = 0.5 * (ta + tb);
+            if (tm <= ta || tm >= tb) {
+                broke = stuck > 0;
+                break;
+            }
+            const double fm = f.at({ tm });
+            if (!std::isfinite(fm)) {
+                record(tm);
+                break;
+            }
+            const double left = std::fabs(fm - fa);
+            const double right = std::fabs(fb - fm);
+            if (left >= right) {
+                tb = tm;
+                fb = fm;
+            } else {
+                ta = tm;
+                fa = fm;
+            }
+            const double next = std::max(left, right);
+            if (next < 1e-6 * view) break;
+            stuck = next > 0.85 * jump ? stuck + 1 : 0;
+            jump = next;
+            if (stuck >= 8 && tb - ta < 1e-9 * std::max(1.0, std::fabs(ta))) {
+                broke = true;
+                break;
+            }
+        }
+        if (broke) record(0.5 * (ta + tb));
+    }
+    std::sort(out.begin(), out.end(), [](const Vertical& x, const Vertical& y) { return x.at < y.at; });
+    return out;
+}
+
+struct Tail {
+    bool found = false;
+    double slope = 0.0;
+    double intercept = 0.0;
+};
+
+Tail tail_line(Func& f, double sign) {
+    Tail t;
+    const double xs[6] = { 1.0731e2 + 0.3183, 1.0731e4 + 0.3183, 1.0731e6 + 0.3183, 1.0731e8 + 0.3183, 1.0731e10 + 0.3183, 1.0731e12 + 0.3183 };
+    double v[6];
+    for (int k = 0; k < 6; ++k) v[k] = f.at({ sign * xs[k] });
+    auto close = [](double p, double q, double tol) { return std::isfinite(p) && std::isfinite(q) && std::fabs(p - q) <= tol * std::max(1.0, std::fabs(q)); };
+    if (close(v[3], v[5], 1e-5) && close(v[4], v[5], 1e-7)) {
+        t.found = true;
+        t.intercept = v[5];
+        if (std::fabs(t.intercept - std::round(t.intercept)) < 1e-7) t.intercept = std::round(t.intercept);
+        return t;
+    }
+    const double x1 = sign * (1.0731e6 + 0.3183);
+    const double x2 = sign * (1.0731e7 + 0.3183);
+    const double x3 = sign * (1.0731e8 + 0.3183);
+    const double f1 = f.at({ x1 });
+    const double f2 = f.at({ x2 });
+    const double f3 = f.at({ x3 });
+    if (!std::isfinite(f1) || !std::isfinite(f2) || !std::isfinite(f3)) return t;
+    const double m1 = (f2 - f1) / (x2 - x1);
+    const double m2 = (f3 - f2) / (x3 - x2);
+    if (!std::isfinite(m1) || !std::isfinite(m2) || std::fabs(m2) < 1e-6 || std::fabs(m1 - m2) > 1e-6 * std::fabs(m2)) return t;
+    const double x0 = sign * (1.0731e4 + 0.3183);
+    const double b0 = f.at({ x0 }) - m2 * x0;
+    const double b1 = f1 - m2 * x1;
+    const double b2 = f3 - m2 * x3;
+    if (!close(b1, b2, 1e-4) || !close(b0, b2, 1e-3)) return t;
+    t.found = true;
+    t.slope = std::fabs(m2 - std::round(m2)) < 1e-8 ? std::round(m2) : m2;
+    t.intercept = std::fabs(b2 - std::round(b2)) < 1e-5 ? std::round(b2) : b2;
+    return t;
+}
+
+std::string line_text(const std::string& other, const std::string& var, const Tail& t) {
+    if (t.slope == 0.0) return other + " = " + nice_number(t.intercept);
+    std::string s = other + " = " + (t.slope == 1.0 ? std::string() : t.slope == -1.0 ? std::string("-") : nice_number(t.slope)) + var;
+    if (t.intercept != 0.0) s += (t.intercept < 0 ? " - " : " + ") + nice_number(std::fabs(t.intercept));
+    return s;
+}
+
+double golden(Func& f, double a, double b, bool maximum) {
+    const double g = 0.6180339887498949;
+    double c = b - g * (b - a);
+    double d = a + g * (b - a);
+    double fc = f.at({ c });
+    double fd = f.at({ d });
+    for (int k = 0; k < 90 && b - a > 1e-14 * std::max(1.0, std::fabs(a)); ++k) {
+        const bool left = maximum ? fc > fd : fc < fd;
+        if (left) {
+            b = d;
+            d = c;
+            fd = fc;
+            c = b - g * (b - a);
+            fc = f.at({ c });
+        } else {
+            a = c;
+            c = d;
+            fc = fd;
+            d = a + g * (b - a);
+            fd = f.at({ d });
+        }
+    }
+    return 0.5 * (a + b);
+}
+
+std::string point_list(const std::vector<Vec2>& ps, bool in_y) {
+    std::string s;
+    const std::size_t shown = std::min<std::size_t>(ps.size(), 6);
+    for (std::size_t i = 0; i < shown; ++i) {
+        const Vec2 p = in_y ? Vec2{ ps[i].y, ps[i].x } : ps[i];
+        s += (i ? ", (" : "(") + nice_number(p.x) + ", " + nice_number(p.y) + ")";
+    }
+    if (ps.size() > shown) s += " and " + std::to_string(ps.size() - shown) + " more";
+    return s;
+}
+
+void analyze_function(const Item& item, Ctx& c, ItemStatus& st, Func& fn, bool in_y, const std::string& var, Rgba col) {
+    const bool want_extrema = item.option("extrema");
+    const bool draw_asymptotes = item.option("asymptotes");
+    const double a = in_y ? c.box.ymin : c.box.xmin;
+    const double b = in_y ? c.box.ymax : c.box.xmax;
+    const double view = in_y ? c.box.xmax - c.box.xmin : c.box.ymax - c.box.ymin;
+    const std::string other = in_y ? "x" : "y";
+    Func hw(fn.expr(), { var }, false, NumberType::Hardware);
+    if (!hw.ok()) return;
+    const ExprPtr slope_expr = want_extrema ? d(fn.expr(), var) : nullptr;
+    Func slope;
+    if (slope_expr) slope = Func(slope_expr, { var }, false, NumberType::Hardware);
+    const std::vector<Vertical> verts = vertical_asymptotes(hw, a, b, view);
+    const Tail right = tail_line(hw, 1.0);
+    const Tail left = tail_line(hw, -1.0);
+    const Rgba line_col = faded(c, col, 0.45);
+    if (!verts.empty()) {
+        std::string s;
+        const std::size_t shown = std::min<std::size_t>(verts.size(), 6);
+        for (std::size_t i = 0; i < shown; ++i) s += (i ? ", " : "") + var + " = " + nice_number(verts[i].at);
+        if (verts.size() > shown) s += " and " + std::to_string(verts.size() - shown) + " more in view";
+        st.readouts.push_back({ verts.size() == 1 ? "vertical asymptote" : "vertical asymptotes", s, std::string() });
+        if (draw_asymptotes) {
+            for (const Vertical& v : verts) {
+                const Vec2 p = in_y ? Vec2{ 0.0, v.at } : Vec2{ v.at, 0.0 };
+                const Vec2 dir = in_y ? Vec2{ 1.0, 0.0 } : Vec2{ 0.0, 1.0 };
+                c.scene.s2.strokes.push_back(line_through(p, dir, c.box, line_col, 1.4f, true));
+            }
+        }
+    }
+    auto same = [](const Tail& p, const Tail& q) { return p.found && q.found && p.slope == q.slope && std::fabs(p.intercept - q.intercept) <= 1e-9 * std::max(1.0, std::fabs(p.intercept)); };
+    std::vector<Tail> lines;
+    if (right.found || left.found) {
+        const bool flat_r = right.found && right.slope == 0.0;
+        const bool flat_l = left.found && left.slope == 0.0;
+        std::string s;
+        if (same(right, left)) {
+            s = line_text(other, var, right) + " as " + var + " \xE2\x86\x92 \xC2\xB1\xE2\x88\x9E";
+            lines.push_back(right);
+        } else {
+            if (right.found) {
+                s = line_text(other, var, right) + " as " + var + " \xE2\x86\x92 \xE2\x88\x9E";
+                lines.push_back(right);
+            }
+            if (left.found) {
+                s += (s.empty() ? "" : "; ") + line_text(other, var, left) + " as " + var + " \xE2\x86\x92 -\xE2\x88\x9E";
+                lines.push_back(left);
+            }
+        }
+        const bool slant = (right.found && !flat_r) || (left.found && !flat_l);
+        const bool flat = flat_r || flat_l;
+        st.readouts.push_back({ slant && flat ? "asymptotes at the ends" : slant ? "slant asymptote" : "horizontal asymptote", s, std::string() });
+        if (draw_asymptotes) {
+            for (const Tail& t : lines) {
+                const Vec2 p = in_y ? Vec2{ t.intercept, 0.0 } : Vec2{ 0.0, t.intercept };
+                const Vec2 dir = in_y ? Vec2{ t.slope, 1.0 } : Vec2{ 1.0, t.slope };
+                c.scene.s2.strokes.push_back(line_through(p, dir, c.box, line_col, 1.4f, true));
+            }
+        }
+    }
+    if (!want_extrema || !(b > a)) return;
+    const std::size_t n = 1600;
+    const std::vector<double> ts = linspace(a, b, n + 1);
+    const std::vector<double> vs = hw.map1(ts);
+    std::vector<Vec2> maxima;
+    std::vector<Vec2> minima;
+    auto near_pole = [&](double lo, double hi) {
+        for (const Vertical& v : verts) {
+            if (v.at >= lo && v.at <= hi) return true;
+        }
+        return false;
+    };
+    for (std::size_t i = 1; i + 1 < ts.size(); ++i) {
+        const double l = vs[i - 1];
+        const double m = vs[i];
+        const double r = vs[i + 1];
+        if (!std::isfinite(l) || !std::isfinite(m) || !std::isfinite(r)) continue;
+        const bool is_max = (m > l && m >= r) || (m >= l && m > r);
+        const bool is_min = (m < l && m <= r) || (m <= l && m < r);
+        if (!is_max && !is_min) continue;
+        if (near_pole(ts[i - 1], ts[i + 1])) continue;
+        double t = golden(hw, ts[i - 1], ts[i + 1], is_max);
+        if (slope.ok()) {
+            double lo = ts[i - 1];
+            double hi = ts[i + 1];
+            double slo = slope.at({ lo });
+            const double shi = slope.at({ hi });
+            if (std::isfinite(slo) && std::isfinite(shi) && (slo > 0) != (shi > 0)) {
+                for (int k = 0; k < 100; ++k) {
+                    const double mid = 0.5 * (lo + hi);
+                    if (mid <= lo || mid >= hi) break;
+                    const double sm = slope.at({ mid });
+                    if (!std::isfinite(sm)) break;
+                    if ((sm > 0) == (slo > 0)) {
+                        lo = mid;
+                        slo = sm;
+                    } else {
+                        hi = mid;
+                    }
+                }
+                const double root = 0.5 * (lo + hi);
+                const double fr = hw.at({ root });
+                const double fg = hw.at({ t });
+                if (std::isfinite(fr) && (is_max ? fr >= fg - 1e-12 * std::max(1.0, std::fabs(fg)) : fr <= fg + 1e-12 * std::max(1.0, std::fabs(fg)))) t = root;
+            }
+        }
+        const double v = fn.at({ t });
+        if (!std::isfinite(v)) continue;
+        std::vector<Vec2>& into = is_max ? maxima : minima;
+        if (!into.empty() && std::fabs(into.back().x - t) < 1e-7 * (b - a)) continue;
+        into.push_back(Vec2{ t, v });
+    }
+    double best_hi = -INFINITY;
+    double best_lo = INFINITY;
+    double at_hi = std::nan("");
+    double at_lo = std::nan("");
+    auto consider = [&](double t, double v) {
+        if (!std::isfinite(v)) return;
+        if (v > best_hi) {
+            best_hi = v;
+            at_hi = t;
+        }
+        if (v < best_lo) {
+            best_lo = v;
+            at_lo = t;
+        }
+    };
+    for (std::size_t i = 0; i < ts.size(); ++i) consider(ts[i], vs[i]);
+    for (const Vec2& p : maxima) consider(p.x, p.y);
+    for (const Vec2& p : minima) consider(p.x, p.y);
+    bool up = false;
+    bool down = false;
+    for (const Vertical& v : verts) {
+        up = up || v.up;
+        down = down || v.down;
+    }
+    const bool dots = maxima.size() + minima.size() <= 60;
+    for (const Vec2& p : maxima) {
+        if (dots) c.scene.s2.dots.push_back(Dot2{ in_y ? Vec2{ p.y, p.x } : p, col, 4.0f, true, "" });
+    }
+    for (const Vec2& p : minima) {
+        if (dots) c.scene.s2.dots.push_back(Dot2{ in_y ? Vec2{ p.y, p.x } : p, col, 4.0f, true, "" });
+    }
+    st.readouts.push_back({ "local maxima", maxima.empty() ? std::string("none in view") : point_list(maxima, in_y), std::string() });
+    st.readouts.push_back({ "local minima", minima.empty() ? std::string("none in view") : point_list(minima, in_y), std::string() });
+    const bool limited = item.field(var + "min").find_first_not_of(" \t") != std::string::npos || item.field(var + "max").find_first_not_of(" \t") != std::string::npos;
+    const std::string span = limited ? "[" + nice_number(a) + ", " + nice_number(b) + "]" : "[" + format_double(a, 4) + ", " + format_double(b, 4) + "]";
+    const std::string where = limited ? " on " + span : " in view " + span;
+    auto point = [&](double t, double v) {
+        const Vec2 p = in_y ? Vec2{ v, t } : Vec2{ t, v };
+        return "(" + nice_number(p.x) + ", " + nice_number(p.y) + ")";
+    };
+    if (up) st.readouts.push_back({ "absolute max" + where, "none: it grows without bound near the asymptote", std::string() });
+    else if (std::isfinite(best_hi)) {
+        st.readouts.push_back({ "absolute max" + where, other + " = " + nice_number(best_hi) + " at " + point(at_hi, best_hi), std::string() });
+        c.scene.s2.dots.push_back(Dot2{ in_y ? Vec2{ best_hi, at_hi } : Vec2{ at_hi, best_hi }, col, 6.0f, false, "max" });
+    }
+    if (down) st.readouts.push_back({ "absolute min" + where, "none: it falls without bound near the asymptote", std::string() });
+    else if (std::isfinite(best_lo)) {
+        st.readouts.push_back({ "absolute min" + where, other + " = " + nice_number(best_lo) + " at " + point(at_lo, best_lo), std::string() });
+        c.scene.s2.dots.push_back(Dot2{ in_y ? Vec2{ best_lo, at_lo } : Vec2{ at_lo, best_lo }, col, 6.0f, false, "min" });
+    }
+}
+
 void range_end_dots(Ctx& c, const Item& item, CurveSampler2& s, const Range& range, Rgba col) {
     const double ends[2] = { range.a, range.b };
     const char* fields[2] = { "min", "max" };
@@ -263,6 +637,14 @@ void build_function(const Item& item, Ctx& c, ItemStatus& st) {
         shade_between(c, pts, in_y, edge, soft(col, 0.22), -1e300, 1e300);
     }
     add_stroke(c, pts, col, 2.6f, strict(rel));
+    {
+        auto exact = std::make_shared<Func>(f, std::vector<std::string>{ var }, false, NumberType::Hardware);
+        if (exact->ok()) {
+            c.scene.s2.strokes.back().exact = [exact](double t) { return exact->at({ t }); };
+            c.scene.s2.strokes.back().exact_in_y = in_y;
+        }
+    }
+    analyze_function(item, c, st, fn, in_y, var, col);
 
     const ExprPtr f1 = d(f, var);
     const ExprPtr f2 = f1 ? d(f1, var) : nullptr;

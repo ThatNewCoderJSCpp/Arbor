@@ -70,6 +70,26 @@ const std::set<std::string>& reserved_names() {
     return r;
 }
 
+std::string definition_math(const ExprPtr& e) {
+    if (!e || e->op != Op::Vector) return to_mathtext(e);
+    std::string out = "\xE2\x9F\xA8";
+    for (std::size_t i = 0; i < e->args.size(); ++i) out += (i ? ", " : "") + to_mathtext(e->args[i]);
+    return out + "\xE2\x9F\xA9";
+}
+
+bool complex_inputs(const std::vector<std::string>& params) {
+    return params.size() == 1 && (params[0] == "z" || params[0] == "w");
+}
+
+std::string definition_kind(const std::vector<std::string>& params, const ExprPtr& body) {
+    std::string inputs;
+    for (std::size_t i = 0; i < params.size(); ++i) inputs += (i ? ", " : "") + params[i];
+    const std::size_t parts = component_count(body);
+    if (complex_inputs(params)) return parts > 1 ? "a function of the complex " + inputs + " giving a vector" : "a complex function of " + inputs;
+    if (parts > 1) return "a vector-valued function of " + inputs + " with " + std::to_string(parts) + " parts";
+    return "a function of " + inputs;
+}
+
 void define_all(const Graph& g, Env& env, std::vector<ItemStatus>& status) {
     for (int pass = 0; pass < 2; ++pass) {
         for (const Item& item : g.items) {
@@ -84,7 +104,10 @@ void define_all(const Graph& g, Env& env, std::vector<ItemStatus>& status) {
             if (s.is_function_definition) {
                 env.functions[s.defines] = UserFunction{ s.params, s.rhs };
                 env.defined.insert(s.defines);
-                if (pass == 1 && st != status.end()) st->mathtext = to_mathtext(s.lhs) + " = " + to_mathtext(s.rhs);
+                if (pass == 1 && st != status.end()) {
+                    st->mathtext = to_mathtext(s.lhs) + " = " + definition_math(s.rhs);
+                    st->readouts.push_back({ "kind", definition_kind(s.params, s.rhs), std::string() });
+                }
                 continue;
             }
             if (s.is_value_definition) {
@@ -93,7 +116,7 @@ void define_all(const Graph& g, Env& env, std::vector<ItemStatus>& status) {
                     continue;
                 }
                 env.defined.insert(s.defines);
-                if (is_constant(s.rhs)) {
+                if (is_constant(s.rhs) && s.rhs->op != Op::Vector) {
                     std::string err;
                     Env scratch = env;
                     ExprPtr e = prepare(s.rhs, scratch, {}, err);
@@ -114,15 +137,120 @@ void define_all(const Graph& g, Env& env, std::vector<ItemStatus>& status) {
                         std::string err;
                         Env scratch = env;
                         ExprPtr e = prepare(s.rhs, scratch, {}, err);
-                        if (e && is_constant(e)) st->readouts.push_back({ s.defines, value_text(e, {}, {}, scratch) });
+                        if (e && is_constant(e) && e->op != Op::Vector) st->readouts.push_back({ s.defines, value_text(e, {}, {}, scratch) });
+                        if (s.rhs->op == Op::Vector) st->readouts.push_back({ "kind", "a vector with " + std::to_string(s.rhs->args.size()) + " parts", std::string() });
                     }
                 }
-                if (pass == 1 && st != status.end()) st->mathtext = s.defines + " = " + to_mathtext(s.rhs);
+                if (pass == 1 && st != status.end()) st->mathtext = s.defines + " = " + definition_math(s.rhs);
                 continue;
             }
             if (pass == 1 && st != status.end()) st->error = "write a definition like a = 2 or f(x) = x^2";
         }
     }
+}
+
+std::string auto_draw(Space space, std::size_t inputs, std::size_t parts, bool complex) {
+    if (space == Space::Plane) {
+        if (inputs == 0) return parts == 2 ? "point" : std::string();
+        if (inputs == 1) return complex && parts == 1 ? "complex color map" : parts == 1 ? "graph y = f(x)" : parts == 2 ? "parametric curve" : std::string();
+        if (inputs == 2) return parts == 1 ? "contour map" : parts == 2 ? "vector field" : std::string();
+        return std::string();
+    }
+    if (inputs == 0) return parts == 3 ? "point" : std::string();
+    if (inputs == 1) return parts == 3 ? "space curve" : std::string();
+    if (inputs == 2) return parts == 1 ? "surface z = f(x, y)" : parts == 3 ? "parametric surface" : std::string();
+    if (inputs == 3) return parts == 3 ? "vector field in space" : parts == 1 ? "level surface f = 0" : std::string();
+    return std::string();
+}
+
+void draw_definition(const Item& item, Ctx& c, ItemStatus& st, Space space) {
+    std::string how = item.field("draw");
+    if (how.empty() || how == "no") return;
+    ParseResult r = parse_field(item.field("eq"), c.env, {});
+    if (!r.ok || (!r.statement.is_function_definition && !r.statement.is_value_definition)) return;
+    const Statement& s = r.statement;
+    const std::string name = s.defines;
+    const auto fn = c.env.functions.find(name);
+    const ExprPtr body = fn != c.env.functions.end() ? fn->second.body : s.rhs;
+    const std::size_t inputs = s.is_function_definition ? s.params.size() : 0;
+    const std::size_t parts = component_count(body);
+    const bool complex = s.is_function_definition && complex_inputs(s.params);
+    if (how == "automatic") {
+        how = auto_draw(space, inputs, parts, complex);
+        if (how.empty()) {
+            st.note = "nothing to draw automatically for " + std::to_string(inputs) + (inputs == 1 ? " input" : " inputs") + " and " + std::to_string(parts) + (parts == 1 ? " output" : " outputs") + " in a " + (space == Space::Solid ? "3D" : "2D") + " graph";
+            return;
+        }
+    }
+    struct Way {
+        const char* label;
+        const char* kind;
+        std::size_t inputs;
+        std::size_t parts;
+        const char* eq;
+    };
+    static const Way ways[] = {
+        { "graph y = f(x)", "function", 1, 1, "y = @(x)" },
+        { "parametric curve", "parametric", 1, 2, "@(t)" },
+        { "contour map", "contour", 2, 1, "@(x, y)" },
+        { "vector field", "vector_field", 2, 2, "@(x, y)" },
+        { "complex color map", "domain", 1, 1, "@(z)" },
+        { "point", "points", 0, 0, "" },
+        { "surface z = f(x, y)", "surface", 2, 1, "z = @(x, y)" },
+        { "space curve", "curve3d", 1, 3, "@(t)" },
+        { "parametric surface", "param_surface", 2, 3, "@(u, v)" },
+        { "vector field in space", "vector_field3d", 3, 3, "@(x, y, z)" },
+        { "level surface f = 0", "implicit3d", 3, 1, "@(x, y, z) = 0" }
+    };
+    const Way* way = nullptr;
+    for (const Way& w : ways) {
+        if (how == w.label) way = &w;
+    }
+    if (!way) return;
+    const std::string target = std::string(way->kind) == "points" && space == Space::Solid ? "points3d" : way->kind;
+    const KindInfo* info = find_kind(target);
+    auto builder = builders().find(target);
+    if (!info || builder == builders().end()) return;
+    if (info->space != space) {
+        st.note = std::string("drawing it as a ") + how + " needs a " + (info->space == Space::Solid ? "3D" : "2D") + " graph";
+        return;
+    }
+    std::string eq = way->eq;
+    if (std::string(way->kind) == "points") {
+        if (inputs != 0 || (parts != 2 && parts != 3)) {
+            st.note = "a point needs a value with 2 or 3 parts, like p = \xE2\x9F\xA8" "1, 2\xE2\x9F\xA9";
+            return;
+        }
+        eq = "(" + to_string(component(body, 0)) + ", " + to_string(component(body, 1)) + (parts == 3 ? ", " + to_string(component(body, 2)) : std::string()) + ")";
+    } else {
+        if (inputs != way->inputs || parts != way->parts) {
+            st.note = "a " + how + " needs " + std::to_string(way->inputs) + (way->inputs == 1 ? " input" : " inputs") + " and " + std::to_string(way->parts) + (way->parts == 1 ? " output" : " outputs") + "; " + name + " has " + std::to_string(inputs) + " and " + std::to_string(parts);
+            return;
+        }
+        std::size_t at = eq.find('@');
+        eq.replace(at, 1, name);
+    }
+    Item drawn = item;
+    drawn.kind = info->id;
+    drawn.fields.clear();
+    for (const FieldSpec& f : info->fields) drawn.fields[f.id] = f.value;
+    for (const auto& [key, value] : item.fields) {
+        if (key != "eq" && key != "draw" && !value.empty()) drawn.fields[key] = value;
+    }
+    drawn.fields["eq"] = eq;
+    drawn.options.clear();
+    for (const OptionSpec& o : info->options) drawn.options[o.id] = o.value;
+    const std::string math = st.mathtext;
+    ItemStatus inner;
+    inner.id = item.id;
+    try {
+        builder->second(drawn, c, inner);
+    } catch (const std::exception& e) {
+        inner.error = e.what();
+    }
+    if (!inner.error.empty()) st.note = "couldn't draw it: " + inner.error;
+    else st.note = "drawn as a " + how;
+    st.mathtext = math;
 }
 
 bool surface_z_range(const Graph& g, Env& env, double range, Vec3 target, double& lo, double& hi) {
@@ -302,7 +430,16 @@ Scene build_scene(const BuildRequest& request, const BuildControl& control, Numb
         if (control.cancelled()) break;
         const Item& item = g.items[k];
         ItemStatus& st = scene.status[k];
-        if (item.kind == "define") continue;
+        if (item.kind == "define") {
+            if (item.visible) {
+                const std::size_t strokes_before = scene.s2.strokes.size();
+                const std::size_t dots_before = scene.s2.dots.size();
+                draw_definition(item, c, st, g.space);
+                for (std::size_t q = strokes_before; q < scene.s2.strokes.size(); ++q) scene.s2.strokes[q].item = item.id;
+                for (std::size_t q = dots_before; q < scene.s2.dots.size(); ++q) scene.s2.dots[q].item = item.id;
+            }
+            continue;
+        }
         const KindInfo* info = find_kind(item.kind);
         auto it = builders().find(item.kind);
         if (!info || it == builders().end()) {
@@ -325,6 +462,18 @@ Scene build_scene(const BuildRequest& request, const BuildControl& control, Numb
         }
         CompileBranch branch_scope(branch);
         set_item_deadline(scene.precise_pass ? 0.0 : 20.0);
+        const std::size_t strokes_before = scene.s2.strokes.size();
+        const std::size_t dots_before = scene.s2.dots.size();
+        struct TagItem {
+            Scene& scene;
+            std::size_t strokes;
+            std::size_t dots;
+            const std::string& id;
+            ~TagItem() {
+                for (std::size_t q = strokes; q < scene.s2.strokes.size(); ++q) scene.s2.strokes[q].item = id;
+                for (std::size_t q = dots; q < scene.s2.dots.size(); ++q) scene.s2.dots[q].item = id;
+            }
+        } tag{ scene, strokes_before, dots_before, item.id };
         try {
             it->second(item, c, st);
         } catch (const std::exception& e) {

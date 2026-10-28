@@ -20,6 +20,9 @@ struct Stroke2 {
     Rgba color;
     float width = 2.5f;
     bool dashed = false;
+    std::string item;
+    std::function<double(double)> exact;
+    bool exact_in_y = false;
 };
 
 struct Arrow2 {
@@ -36,6 +39,7 @@ struct Dot2 {
     float radius = 5.0f;
     bool hollow = false;
     std::string label;
+    std::string item;
 };
 
 struct Raster2 {

@@ -34,6 +34,7 @@ struct RenderOptions {
     int supersample = 1;
     bool box = true;
     std::string highlight;
+    std::vector<Dot2> marks;
 };
 
 void render_scene(const Scene& scene, const RenderOptions& options, Image& out);

@@ -881,6 +881,8 @@ private:
 
     void start_graph(const Graph& g, bool on_disk) {
         m_param_playing.clear();
+        m_mark.reset();
+        m_tracing = false;
         m_graph = std::make_unique<Graph>(g);
         m_on_disk = on_disk;
         m_dirty = false;
@@ -975,6 +977,8 @@ private:
 
     void close_graph() {
         m_param_playing.clear();
+        m_mark.reset();
+        m_tracing = false;
         m_graph.reset();
         m_scene.reset();
         m_dirty = false;
@@ -1647,6 +1651,7 @@ private:
         o.labels = g.show_labels;
         o.ui_scale = m_settings.ui_scale;
         o.supersample = supersample;
+        if (m_mark && g.space == Space::Plane) o.marks.push_back(*m_mark);
         return o;
     }
 
@@ -1717,6 +1722,7 @@ private:
         (void)dt;
         if (std::shared_ptr<Scene> s = m_builder.take()) {
             m_scene = std::move(s);
+            refresh_mark();
             ++m_status_revision;
             m_render_wanted = true;
             set_text("info", info_text());
@@ -1786,8 +1792,141 @@ private:
         return m_canvas ? grove::canvas_rect(m_doc, *m_canvas) : grove::CanvasRect{};
     }
 
+    std::string pair_text(double x, double y) const {
+        const int digits = static_cast<int>(std::max(2.0, std::ceil(std::log10(std::max(1.0, m_graph ? m_graph->view2.scale : 40.0))) + 2.0)) + 2;
+        return "(" + format_double(x, digits) + ", " + format_double(y, digits) + ")";
+    }
+
+    bool start_trace(double px, double py) {
+        if (!m_graph || m_graph->space != Space::Plane || !m_scene || m_canvas_w <= 0) return false;
+        const WorldBox2 b = world_box(m_graph->view2, m_canvas_w, m_canvas_h);
+        auto to_px = [&](Vec2 p) { return Vec2{ (p.x - b.xmin) / (b.xmax - b.xmin) * m_canvas_w, (b.ymax - p.y) / (b.ymax - b.ymin) * m_canvas_h }; };
+        const Vec2 cursor{ px, py };
+        const double ui = m_settings.ui_scale;
+        const Dot2* best_dot = nullptr;
+        double best_d = 1e300;
+        for (const Dot2& d : m_scene->s2.dots) {
+            if (!finite(d.at)) continue;
+            const double dist = length(to_px(d.at) - cursor);
+            if (dist <= (d.radius + 6.0) * ui && dist < best_d) {
+                best_d = dist;
+                best_dot = &d;
+            }
+        }
+        if (best_dot) {
+            Dot2 mark = *best_dot;
+            mark.radius = std::max(5.0f, best_dot->radius);
+            mark.hollow = false;
+            mark.label = (best_dot->label.empty() ? std::string() : best_dot->label + "  ") + pair_text(best_dot->at.x, best_dot->at.y);
+            m_mark = mark;
+            m_tracing = false;
+            m_render_wanted = true;
+            return true;
+        }
+        const Stroke2* best = nullptr;
+        best_d = 8.0 * ui;
+        for (const Stroke2& st : m_scene->s2.strokes) {
+            for (std::size_t i = 1; i < st.pts.size(); ++i) {
+                if (!finite(st.pts[i - 1]) || !finite(st.pts[i])) continue;
+                const Vec2 a = to_px(st.pts[i - 1]);
+                const Vec2 c = to_px(st.pts[i]);
+                const Vec2 ab = c - a;
+                const double len2 = dot(ab, ab);
+                const double t = len2 > 0.0 ? std::clamp(dot(cursor - a, ab) / len2, 0.0, 1.0) : 0.0;
+                const double dist = length(a + ab * t - cursor);
+                if (dist < best_d) {
+                    best_d = dist;
+                    best = &st;
+                }
+            }
+        }
+        if (!best) return false;
+        m_trace = *best;
+        m_tracing = true;
+        trace_to(px, py);
+        return true;
+    }
+
+    void refresh_mark() {
+        if (!m_mark || !m_scene || m_mark->item.empty()) return;
+        const bool live = m_graph && std::any_of(m_graph->items.begin(), m_graph->items.end(), [&](const Item& it) { return it.id == m_mark->item && it.visible; });
+        if (!live) {
+            m_mark.reset();
+            m_tracing = false;
+            return;
+        }
+        for (const Stroke2& st : m_scene->s2.strokes) {
+            if (st.item != m_mark->item || !st.exact || st.color.r != m_mark->color.r || st.color.g != m_mark->color.g || st.color.b != m_mark->color.b) continue;
+            const double t = st.exact_in_y ? m_mark->at.y : m_mark->at.x;
+            const double v = st.exact(t);
+            if (!std::isfinite(v)) continue;
+            m_mark->at = st.exact_in_y ? Vec2{ v, t } : Vec2{ t, v };
+            m_mark->label = pair_text(m_mark->at.x, m_mark->at.y);
+            if (m_tracing) m_trace = st;
+            return;
+        }
+    }
+
+    void trace_to(double px, double py) {
+        if (!m_graph || !m_tracing || m_canvas_w <= 0) return;
+        const WorldBox2 b = world_box(m_graph->view2, m_canvas_w, m_canvas_h);
+        const double wx = b.xmin + px / m_canvas_w * (b.xmax - b.xmin);
+        const double wy = b.ymax - py / m_canvas_h * (b.ymax - b.ymin);
+        Vec2 at{ std::nan(""), std::nan("") };
+        if (m_trace.exact) {
+            const double t = m_trace.exact_in_y ? wy : wx;
+            const double v = m_trace.exact(t);
+            if (std::isfinite(v)) at = m_trace.exact_in_y ? Vec2{ v, t } : Vec2{ t, v };
+        }
+        if (!finite(at)) {
+            auto to_px = [&](Vec2 p) { return Vec2{ (p.x - b.xmin) / (b.xmax - b.xmin) * m_canvas_w, (b.ymax - p.y) / (b.ymax - b.ymin) * m_canvas_h }; };
+            const Vec2 cursor{ px, py };
+            double best = 1e300;
+            for (std::size_t i = 1; i < m_trace.pts.size(); ++i) {
+                const Vec2 p0 = m_trace.pts[i - 1];
+                const Vec2 p1 = m_trace.pts[i];
+                if (!finite(p0) || !finite(p1)) continue;
+                const Vec2 a = to_px(p0);
+                const Vec2 ab = to_px(p1) - a;
+                const double len2 = dot(ab, ab);
+                const double t = len2 > 0.0 ? std::clamp(dot(cursor - a, ab) / len2, 0.0, 1.0) : 0.0;
+                const double dist = length(a + ab * t - cursor);
+                if (dist < best) {
+                    best = dist;
+                    at = p0 + (p1 - p0) * t;
+                }
+            }
+        }
+        if (!finite(at)) return;
+        Dot2 mark;
+        mark.at = at;
+        mark.color = m_trace.color;
+        mark.radius = 5.0f;
+        mark.item = m_trace.item;
+        mark.label = pair_text(at.x, at.y);
+        m_mark = mark;
+        m_render_wanted = true;
+        set_text("coords", mark.label);
+    }
+
     void mouse_down(grove::Event& e) {
         if (!m_graph) return;
+        if (e.button == 1 && m_graph->space == Space::Plane) {
+            const grove::CanvasRect r = rect();
+            if (start_trace(e.x - r.x, e.y - r.y)) {
+                m_last_interaction = std::chrono::steady_clock::now();
+                if (!m_tracing) return;
+                m_dragging = true;
+                m_drag_button = e.button;
+                m_last_x = e.x;
+                m_last_y = e.y;
+                return;
+            }
+            if (m_mark) {
+                m_mark.reset();
+                m_render_wanted = true;
+            }
+        }
         m_dragging = true;
         m_drag_button = e.button;
         m_drag_shift = (e.modifiers & grove::ModifierShift) != 0;
@@ -1799,6 +1938,11 @@ private:
     void mouse_up(grove::Event&) {
         if (!m_dragging) return;
         m_dragging = false;
+        if (m_tracing) {
+            m_tracing = false;
+            m_last_interaction = std::chrono::steady_clock::now();
+            return;
+        }
         if (m_graph && m_graph->space == Space::Solid && m_panned) request_build();
         m_panned = false;
         m_last_interaction = std::chrono::steady_clock::now();
@@ -1809,6 +1953,10 @@ private:
         const grove::CanvasRect r = rect();
         if (!m_dragging) {
             hover(e.x - r.x, e.y - r.y);
+            return;
+        }
+        if (m_tracing) {
+            trace_to(e.x - r.x, e.y - r.y);
             return;
         }
         const double dx = e.x - m_last_x;
@@ -1838,7 +1986,7 @@ private:
             return;
         }
         g.view3.yaw += dx * 0.009;
-        g.view3.pitch = std::clamp(g.view3.pitch + dy * 0.009, -1.55, 1.55);
+        g.view3.pitch = std::clamp(g.view3.pitch - dy * 0.009, -1.55, 1.55);
         changed_view(false);
     }
 
@@ -2035,6 +2183,9 @@ private:
     std::chrono::steady_clock::time_point m_last_interaction;
     std::chrono::steady_clock::time_point m_last_request;
     bool m_dragging = false;
+    bool m_tracing = false;
+    Stroke2 m_trace;
+    std::optional<Dot2> m_mark;
     bool m_drag_shift = false;
     bool m_panned = false;
     int m_drag_button = 0;

@@ -301,6 +301,22 @@ bool uses_branches(const ExprPtr& e, bool complex) {
     return false;
 }
 
+bool is_bound_name(const std::string& name) {
+    static const char* const names[] = { "sum", "prod", "integral", "maximum", "minimum", "argmax", "argmin" };
+    for (const char* n : names) {
+        if (name == n) return true;
+    }
+    return false;
+}
+
+bool is_bound_call(const ExprPtr& e) {
+    return e && e->op == Op::Call && e->args.size() == 4 && e->args[1] && e->args[1]->op == Op::Variable && is_bound_name(e->text);
+}
+
+std::string bound_variable(const ExprPtr& e) {
+    return is_bound_call(e) ? e->args[1]->text : std::string();
+}
+
 bool is_constant(const ExprPtr& e) {
     if (!e) return true;
     if (e->op == Op::Variable) return is_builtin_constant(e->text);
@@ -313,6 +329,10 @@ bool is_constant(const ExprPtr& e) {
 bool depends_on(const ExprPtr& e, const std::string& name) {
     if (!e) return false;
     if (e->op == Op::Variable) return e->text == name;
+    if (is_bound_call(e)) {
+        if (depends_on(e->args[2], name) || depends_on(e->args[3], name)) return true;
+        return e->args[1]->text != name && depends_on(e->args[0], name);
+    }
     for (const ExprPtr& a : e->args) {
         if (depends_on(a, name)) return true;
     }
@@ -322,6 +342,15 @@ bool depends_on(const ExprPtr& e, const std::string& name) {
 void collect_names(const ExprPtr& e, std::set<std::string>& out) {
     if (!e) return;
     if (e->op == Op::Variable && !is_builtin_constant(e->text)) out.insert(e->text);
+    if (is_bound_call(e)) {
+        collect_names(e->args[2], out);
+        collect_names(e->args[3], out);
+        std::set<std::string> inner;
+        collect_names(e->args[0], inner);
+        inner.erase(e->args[1]->text);
+        out.insert(inner.begin(), inner.end());
+        return;
+    }
     for (const ExprPtr& a : e->args) collect_names(a, out);
 }
 
@@ -345,6 +374,15 @@ ExprPtr substitute(const ExprPtr& e, const std::map<std::string, ExprPtr>& with)
         return it != with.end() ? it->second : e;
     }
     if (e->args.empty()) return e;
+    if (is_bound_call(e)) {
+        std::map<std::string, ExprPtr> inner = with;
+        inner.erase(e->args[1]->text);
+        ExprPtr body = substitute(e->args[0], inner);
+        ExprPtr lo = substitute(e->args[2], with);
+        ExprPtr hi = substitute(e->args[3], with);
+        if (body == e->args[0] && lo == e->args[2] && hi == e->args[3]) return e;
+        return make(Op::Call, { body, e->args[1], lo, hi }, e->text);
+    }
     std::vector<ExprPtr> args;
     bool changed = false;
     for (const ExprPtr& a : e->args) {
@@ -399,6 +437,187 @@ ExprPtr inline_functions(const ExprPtr& e, const FunctionTable& functions, std::
     auto rebuilt = std::make_shared<Expr>(*e);
     rebuilt->args = std::move(args);
     return simplify(rebuilt);
+}
+
+bool is_vector_function(const FunctionTable& functions, const std::string& name) {
+    const auto it = functions.find(name);
+    return it != functions.end() && it->second.body && it->second.body->op == Op::Vector;
+}
+
+namespace {
+
+bool is_vec(const ExprPtr& e) {
+    return e && e->op == Op::Vector;
+}
+
+ExprPtr sum_of_squares(const ExprPtr& v) {
+    ExprPtr out;
+    for (const ExprPtr& c : v->args) {
+        ExprPtr sq = pow(c, number(2.0));
+        out = out ? add(out, sq) : sq;
+    }
+    return out ? out : number(0.0);
+}
+
+ExprPtr dot_of(const ExprPtr& a, const ExprPtr& b) {
+    ExprPtr out;
+    for (std::size_t i = 0; i < a->args.size(); ++i) {
+        ExprPtr p = mul(a->args[i], b->args[i]);
+        out = out ? add(out, p) : p;
+    }
+    return out ? out : number(0.0);
+}
+
+} // namespace
+
+ExprPtr expand_vectors(const ExprPtr& e, const FunctionTable& functions, std::string& error, int depth) {
+    if (!e || !error.empty()) return e;
+    if (depth > 40) {
+        error = "a function refers to itself";
+        return e;
+    }
+    if (e->op == Op::Variable) {
+        const auto it = functions.find(e->text);
+        if (it != functions.end() && it->second.params.empty() && is_vec(it->second.body)) return expand_vectors(it->second.body, functions, error, depth + 1);
+        return e;
+    }
+    std::vector<ExprPtr> args;
+    bool changed = false;
+    bool any_vec = false;
+    for (const ExprPtr& a : e->args) {
+        args.push_back(expand_vectors(a, functions, error, depth));
+        if (!error.empty()) return e;
+        changed = changed || args.back() != a;
+        any_vec = any_vec || is_vec(args.back());
+    }
+    if (e->op == Op::Call) {
+        const auto it = functions.find(e->text);
+        if (it != functions.end() && it->second.params.size() == args.size() && (is_vec(it->second.body) || any_vec)) {
+            std::map<std::string, ExprPtr> with;
+            for (std::size_t i = 0; i < args.size(); ++i) with[it->second.params[i]] = args[i];
+            return expand_vectors(substitute(it->second.body, with), functions, error, depth + 1);
+        }
+    }
+    auto rebuilt = [&]() -> ExprPtr {
+        if (!changed) return e;
+        auto r = std::make_shared<Expr>(*e);
+        r->args = args;
+        return r;
+    };
+    if (!any_vec) {
+        if (e->op == Op::Call && args.size() == 1 && (e->text == "norm" || e->text == "unit")) return e->text == "norm" ? call("abs", { args[0] }) : call("sign", { args[0] });
+        return rebuilt();
+    }
+    auto size_error = [&](const char* what) {
+        error = std::string("the vectors in ") + what + " have different numbers of parts";
+        return e;
+    };
+    switch (e->op) {
+        case Op::Add:
+        case Op::Sub: {
+            if (!is_vec(args[0]) || !is_vec(args[1])) {
+                error = std::string("can't ") + (e->op == Op::Add ? "add a number to a vector" : "subtract a number and a vector") + "; use \xE2\x9F\xA8...\xE2\x9F\xA9 on both sides";
+                return e;
+            }
+            if (args[0]->args.size() != args[1]->args.size()) return size_error(e->op == Op::Add ? "a sum" : "a difference");
+            std::vector<ExprPtr> parts;
+            for (std::size_t i = 0; i < args[0]->args.size(); ++i) parts.push_back(e->op == Op::Add ? add(args[0]->args[i], args[1]->args[i]) : sub(args[0]->args[i], args[1]->args[i]));
+            return vector_of(parts);
+        }
+        case Op::Mul: {
+            if (is_vec(args[0]) && is_vec(args[1])) {
+                if (args[0]->args.size() != args[1]->args.size()) return size_error("a dot product");
+                return dot_of(args[0], args[1]);
+            }
+            const ExprPtr& v = is_vec(args[0]) ? args[0] : args[1];
+            const ExprPtr& k = is_vec(args[0]) ? args[1] : args[0];
+            std::vector<ExprPtr> parts;
+            for (const ExprPtr& c : v->args) parts.push_back(is_vec(args[0]) ? mul(c, k) : mul(k, c));
+            return vector_of(parts);
+        }
+        case Op::Div: {
+            if (is_vec(args[1])) {
+                error = "can't divide by a vector";
+                return e;
+            }
+            std::vector<ExprPtr> parts;
+            for (const ExprPtr& c : args[0]->args) parts.push_back(div(c, args[1]));
+            return vector_of(parts);
+        }
+        case Op::Neg: {
+            std::vector<ExprPtr> parts;
+            for (const ExprPtr& c : args[0]->args) parts.push_back(neg(c));
+            return vector_of(parts);
+        }
+        case Op::Pow:
+            error = "a vector can't be raised to a power; use dot(v, v) or |v|^2";
+            return e;
+        case Op::Vector: {
+            for (const ExprPtr& a : args) {
+                if (is_vec(a)) {
+                    error = "a vector can't be a part of another vector";
+                    return e;
+                }
+            }
+            return rebuilt();
+        }
+        case Op::Call: {
+            const std::string& n = e->text;
+            if ((n == "abs" || n == "norm" || n == "mag") && args.size() == 1) return call("sqrt", { sum_of_squares(args[0]) });
+            if (n == "unit" && args.size() == 1) {
+                const ExprPtr len = call("sqrt", { sum_of_squares(args[0]) });
+                std::vector<ExprPtr> parts;
+                for (const ExprPtr& c : args[0]->args) parts.push_back(div(c, len));
+                return vector_of(parts);
+            }
+            if (n == "dot" && args.size() == 2) {
+                if (!is_vec(args[0]) || !is_vec(args[1])) {
+                    error = "dot needs two vectors";
+                    return e;
+                }
+                if (args[0]->args.size() != args[1]->args.size()) return size_error("dot");
+                return dot_of(args[0], args[1]);
+            }
+            if (n == "cross" && args.size() == 2) {
+                if (!is_vec(args[0]) || !is_vec(args[1]) || args[0]->args.size() != args[1]->args.size() || (args[0]->args.size() != 2 && args[0]->args.size() != 3)) {
+                    error = "cross needs two vectors with 2 or 3 parts each";
+                    return e;
+                }
+                const auto& a = args[0]->args;
+                const auto& b = args[1]->args;
+                if (a.size() == 2) return sub(mul(a[0], b[1]), mul(a[1], b[0]));
+                return vector_of({ sub(mul(a[1], b[2]), mul(a[2], b[1])), sub(mul(a[2], b[0]), mul(a[0], b[2])), sub(mul(a[0], b[1]), mul(a[1], b[0])) });
+            }
+            if (n == "component" && args.size() == 2 && is_vec(args[0])) {
+                double k = 0.0;
+                if (!num_value(args[1], k) || k != std::floor(k) || k < 1.0 || k > static_cast<double>(args[0]->args.size())) {
+                    error = "this vector has " + std::to_string(args[0]->args.size()) + " parts";
+                    return e;
+                }
+                return args[0]->args[static_cast<std::size_t>(k) - 1];
+            }
+            if (n == "if" && args.size() >= 2) {
+                const ExprPtr& a = args[1];
+                const ExprPtr b = args.size() > 2 ? args[2] : nullptr;
+                if (is_vec(args[0]) || !is_vec(a) || (b && (!is_vec(b) || b->args.size() != a->args.size()))) {
+                    error = "both values of if must be vectors with the same number of parts";
+                    return e;
+                }
+                std::vector<ExprPtr> parts;
+                for (std::size_t i = 0; i < a->args.size(); ++i) parts.push_back(b ? make(Op::Call, { args[0], a->args[i], b->args[i] }, "if") : make(Op::Call, { args[0], a->args[i] }, "if"));
+                return vector_of(parts);
+            }
+            if (is_bound_call(e) && (n == "sum" || n == "integral") && is_vec(args[0]) && !is_vec(args[2]) && !is_vec(args[3])) {
+                std::vector<ExprPtr> parts;
+                for (const ExprPtr& c : args[0]->args) parts.push_back(make(Op::Call, { c, args[1], args[2], args[3] }, n));
+                return vector_of(parts);
+            }
+            error = n + " needs numbers, not vectors";
+            return e;
+        }
+        default:
+            return rebuilt();
+    }
 }
 
 ExprPtr simplify(const ExprPtr& e) {
@@ -489,6 +708,41 @@ ExprPtr derivative(const ExprPtr& e, const std::string& v) {
         case Op::Call: {
             const std::string& n = e->text;
             if (e->args.empty()) return nullptr;
+            if (is_bound_call(e)) {
+                const ExprPtr& body = e->args[0];
+                const std::string bv = e->args[1]->text;
+                const ExprPtr& lo = e->args[2];
+                const ExprPtr& hi = e->args[3];
+                if (bv == v) return number(0.0);
+                if (n == "sum" && !depends_on(lo, v) && !depends_on(hi, v)) {
+                    ExprPtr db = derivative(body, v);
+                    return db ? make(Op::Call, { db, e->args[1], lo, hi }, "sum") : nullptr;
+                }
+                if (n == "integral") {
+                    ExprPtr out = number(0.0);
+                    if (depends_on(hi, v)) {
+                        ExprPtr dh = derivative(hi, v);
+                        if (!dh) return nullptr;
+                        out = add(out, mul(substitute(body, { { bv, hi } }), dh));
+                    }
+                    if (depends_on(lo, v)) {
+                        ExprPtr dl = derivative(lo, v);
+                        if (!dl) return nullptr;
+                        out = sub(out, mul(substitute(body, { { bv, lo } }), dl));
+                    }
+                    if (depends_on(body, v)) {
+                        ExprPtr db = derivative(body, v);
+                        if (!db) return nullptr;
+                        out = add(out, make(Op::Call, { db, e->args[1], lo, hi }, "integral"));
+                    }
+                    return out;
+                }
+                const ExprPtr two = number(2.0);
+                const ExprPtr h = mul(number(1e-6), add(number(1.0), call("abs", { variable(v) })));
+                std::map<std::string, ExprPtr> plus{ { v, add(variable(v), h) } };
+                std::map<std::string, ExprPtr> minus{ { v, sub(variable(v), h) } };
+                return div(sub(substitute(e, plus), substitute(e, minus)), mul(two, h));
+            }
             const ExprPtr& u = e->args[0];
             ExprPtr du = derivative(u, v);
             if (!du) return nullptr;
@@ -646,6 +900,22 @@ std::string greek_math(const std::string& name) {
     return name;
 }
 
+template <class Show>
+std::string bound_math(const ExprPtr& e, Show show) {
+    const std::string& n = e->text;
+    const std::string var = show(e->args[1]);
+    const std::string body = show(e->args[0]);
+    const std::string lo = show(e->args[2]);
+    const std::string hi = show(e->args[3]);
+    if (n == "sum") return "Sum(" + var + ", " + lo + ", " + hi + ", " + body + ")";
+    if (n == "prod") return "Product(" + var + ", " + lo + ", " + hi + ", " + body + ")";
+    if (n == "integral") return "defint(" + lo + ", " + hi + ", " + body + ", " + var + ")";
+    const std::string range = lo + " \\leq\\ " + var + " \\leq\\ " + hi;
+    if (n == "maximum") return "Maximum(" + range + ", " + body + ")";
+    if (n == "minimum") return "Minimum(" + range + ", " + body + ")";
+    return n + "_{" + range + "}(" + body + ")";
+}
+
 std::string print(const ExprPtr& e, bool math) {
     if (!e) return "?";
     auto wrap = [&](const ExprPtr& c, int min_prec) {
@@ -672,6 +942,7 @@ std::string print(const ExprPtr& e, bool math) {
         case Op::Neg:
             return "-" + wrap(e->args[0], 3);
         case Op::Call: {
+            if (math && is_bound_call(e)) return bound_math(e, [](const ExprPtr& x) { return print(x, true); });
             std::string s = e->text + "(";
             for (std::size_t i = 0; i < e->args.size(); ++i) {
                 if (i) s += ", ";
@@ -738,6 +1009,8 @@ enum class Tok {
     NotEqual,
     AngleOpen,
     AngleClose,
+    Underscore,
+    Dot,
     Sqrt,
     Square,
     Cube,
@@ -782,6 +1055,10 @@ const Symbol k_symbols[] = {
 
 bool word_char(unsigned char c) {
     return std::isalnum(c) || c == '_';
+}
+
+bool big_operator_word(const std::string& w) {
+    return w == "sum" || w == "prod" || w == "product" || w == "int" || w == "integral";
 }
 
 std::vector<Token> lex(const std::string& s, std::string& error, std::size_t& error_at) {
@@ -848,6 +1125,7 @@ std::vector<Token> lex(const std::string& s, std::string& error, std::size_t& er
             std::string word;
             while (j < s.size()) {
                 const unsigned char wc = static_cast<unsigned char>(s[j]);
+                if (wc == '_' && big_operator_word(word)) break;
                 if (wc == '_' && j + 1 < s.size() && s[j + 1] == '{') {
                     const std::size_t close = s.find('}', j + 2);
                     bool plain = close != std::string::npos && close > j + 2;
@@ -897,6 +1175,8 @@ std::vector<Token> lex(const std::string& s, std::string& error, std::size_t& er
             case '{': t.kind = Tok::LParen; break;
             case '}': t.kind = Tok::RParen; break;
             case ',': t.kind = Tok::Comma; break;
+            case '_': t.kind = Tok::Underscore; break;
+            case '.': t.kind = Tok::Dot; break;
             case '|': t.kind = Tok::Bar; break;
             case '!':
                 if (i + 1 < s.size() && s[i + 1] == '=') {
@@ -1065,6 +1345,10 @@ struct Parser {
                 out.push_back(t);
                 continue;
             }
+            if (i + 1 < toks.size() && toks[i + 1].kind == Tok::Underscore && big_operator_word(t.text)) {
+                out.push_back(t);
+                continue;
+            }
             if (i + 1 < toks.size() && toks[i + 1].kind == Tok::LParen && (find_function(t.text) || options.function_names.count(t.text))) {
                 out.push_back(t);
                 continue;
@@ -1178,6 +1462,22 @@ struct Parser {
     ExprPtr parse_postfix() {
         ExprPtr e = parse_primary();
         while (e && error.empty()) {
+            if (peek().kind == Tok::Dot && (peek(1).kind == Tok::Word || peek(1).kind == Tok::Number)) {
+                const Token part = peek(1);
+                int k = 0;
+                if (part.kind == Tok::Number) k = std::atoi(part.text.c_str());
+                else if (part.text == "x") k = 1;
+                else if (part.text == "y") k = 2;
+                else if (part.text == "z") k = 3;
+                else if (part.text == "w") k = 4;
+                if (k < 1) {
+                    fail("after a dot, use x, y, z, w or a part number, as in r(t).x");
+                    return nullptr;
+                }
+                pos += 2;
+                e = make(Op::Call, { e, number(static_cast<double>(k)) }, "component");
+                continue;
+            }
             if (accept(Tok::Bang)) e = make(Op::Call, { make(Op::Add, { e, number(1.0) }) }, "gamma");
             else if (accept(Tok::Square)) e = make(Op::Pow, { e, number(2.0) });
             else if (accept(Tok::Cube)) e = make(Op::Pow, { e, number(3.0) });
@@ -1287,6 +1587,156 @@ struct Parser {
         return std::string();
     }
 
+    static std::string word_name(const std::string& w) {
+        if (!w.empty() && w[0] == '\x01') return w.substr(1);
+        return w;
+    }
+
+    ExprPtr bound_call_from(const std::string& fname, const std::vector<ExprPtr>& args) {
+        const char* how = fname == "sum" ? "sum(n^2, n, 1, 10)" : fname == "prod" ? "prod(k, k, 1, n)" : fname == "integral" ? "integral(sin(t), t, 0, x)" : fname == "doubleintegral" ? "doubleintegral(x*y, x, 0, 1, y, 0, x)" : fname == "tripleintegral" ? "tripleintegral(1, x, 0, 1, y, 0, 1, z, 0, 1)" : "maximum(sin(t), t, 0, x)";
+        const std::size_t want = fname == "doubleintegral" ? 7 : fname == "tripleintegral" ? 10 : 4;
+        if (args.size() != want) {
+            fail(fname + " takes " + std::to_string(want) + " inputs, as in " + how);
+            return nullptr;
+        }
+        for (std::size_t i = 1; i < want; i += 3) {
+            if (!args[i] || args[i]->op != Op::Variable) {
+                fail("the variable goes after the " + std::string(i == 1 ? "expression" : "bounds before it") + ", as in " + how);
+                return nullptr;
+            }
+        }
+        if (want == 4) return make(Op::Call, args, fname);
+        struct Level {
+            ExprPtr var;
+            ExprPtr lo;
+            ExprPtr hi;
+        };
+        std::vector<Level> levels;
+        for (std::size_t i = 1; i < want; i += 3) levels.push_back(Level{ args[i], args[i + 1], args[i + 2] });
+        std::vector<Level> order;
+        while (!levels.empty()) {
+            std::size_t pick = 0;
+            for (std::size_t k = 0; k < levels.size(); ++k) {
+                bool free = true;
+                for (std::size_t m = 0; m < levels.size(); ++m) {
+                    if (m != k && (depends_on(levels[m].lo, levels[k].var->text) || depends_on(levels[m].hi, levels[k].var->text))) free = false;
+                }
+                if (!free) continue;
+                pick = k;
+                break;
+            }
+            order.push_back(levels[pick]);
+            levels.erase(levels.begin() + static_cast<std::ptrdiff_t>(pick));
+        }
+        ExprPtr body = args[0];
+        for (const Level& lv : order) body = make(Op::Call, { body, lv.var, lv.lo, lv.hi }, "integral");
+        return body;
+    }
+
+    std::size_t differential_at(std::string& var, std::size_t& resume) const {
+        int depth = 0;
+        int nested = 0;
+        for (std::size_t j = pos; j < toks.size(); ++j) {
+            const Token& t = toks[j];
+            if (t.kind == Tok::End) break;
+            if (t.kind == Tok::LParen || t.kind == Tok::LBracket || t.kind == Tok::AngleOpen) ++depth;
+            else if (t.kind == Tok::RParen || t.kind == Tok::RBracket || t.kind == Tok::AngleClose) {
+                if (--depth < 0) break;
+            } else if (depth == 0 && t.kind == Tok::Comma) {
+                break;
+            } else if (t.kind == Tok::Word && (t.text == "int" || t.text == "integral") && j + 1 < toks.size() && toks[j + 1].kind == Tok::Underscore) {
+                ++nested;
+            } else if (t.kind == Tok::Word && t.text == "d" && j + 1 < toks.size() && toks[j + 1].kind == Tok::Word) {
+                std::size_t after = j + 2;
+                int left = depth;
+                while (left > 0 && after < toks.size() && (toks[after].kind == Tok::RParen || toks[after].kind == Tok::RBracket)) {
+                    ++after;
+                    --left;
+                }
+                if (left != 0) continue;
+                if (nested > 0) {
+                    --nested;
+                    continue;
+                }
+                var = word_name(toks[j + 1].text);
+                resume = after;
+                return j;
+            }
+        }
+        return std::string::npos;
+    }
+
+    ExprPtr parse_big_operator(const std::string& word) {
+        const bool series = word == "sum" || word == "prod" || word == "product";
+        const std::string fname = word == "sum" ? "sum" : series ? "prod" : "integral";
+        const std::string sign = word == "sum" ? "sum" : series ? "prod" : "int";
+        accept(Tok::Underscore);
+        std::string var;
+        ExprPtr lo;
+        const bool grouped = accept(Tok::LParen);
+        if (series || (grouped && peek().kind == Tok::Word && peek(1).kind == Tok::Equal)) {
+            if (peek().kind != Tok::Word || peek(1).kind != Tok::Equal) {
+                fail(sign + " needs its variable and start below it, as in " + sign + "_{n=1}^{10}");
+                return nullptr;
+            }
+            var = word_name(peek().text);
+            pos += 2;
+        }
+        lo = grouped ? parse_expr() : parse_postfix();
+        if (!lo) return nullptr;
+        if (grouped && !accept(Tok::RParen)) {
+            fail("missing } after the lower bound of " + sign);
+            return nullptr;
+        }
+        if (!accept(Tok::Caret)) {
+            fail(sign + " needs an upper bound: " + sign + "_{...}^{...}");
+            return nullptr;
+        }
+        ExprPtr hi = parse_exponent();
+        if (!hi) return nullptr;
+        ExprPtr body;
+        if (series) {
+            body = parse_term();
+            if (!body) {
+                fail(sign + " needs something to add up after its bounds");
+                return nullptr;
+            }
+        } else {
+            std::string dvar;
+            std::size_t resume = 0;
+            const std::size_t end = differential_at(dvar, resume);
+            if (end == std::string::npos) {
+                fail("end the integral with d and its variable, as in int_{0}^{x} sin(t) dt");
+                return nullptr;
+            }
+            if (!var.empty() && var != dvar) {
+                fail("the integral's variable is " + var + " below the sign but d" + dvar + " at the end");
+                return nullptr;
+            }
+            var = dvar;
+            Parser sub(options);
+            sub.toks.assign(toks.begin() + static_cast<std::ptrdiff_t>(pos), toks.begin() + static_cast<std::ptrdiff_t>(end));
+            sub.toks.insert(sub.toks.end(), toks.begin() + static_cast<std::ptrdiff_t>(end + 2), toks.begin() + static_cast<std::ptrdiff_t>(resume));
+            Token stop;
+            stop.kind = Tok::End;
+            stop.at = toks[resume < toks.size() ? resume : toks.size() - 1].at;
+            sub.toks.push_back(stop);
+            sub.condition_depth = condition_depth;
+            body = sub.parse_expr();
+            if (!sub.error.empty()) {
+                error = sub.error;
+                error_at = sub.error_at;
+                return nullptr;
+            }
+            if (!body || sub.peek().kind != Tok::End) {
+                fail(body ? "unexpected " + describe(sub.peek()) + " in the integral" : "the integral needs something to integrate");
+                return nullptr;
+            }
+            pos = resume;
+        }
+        return make(Op::Call, { body, make(Op::Variable, {}, var), lo, hi }, fname);
+    }
+
     ExprPtr parse_primary() {
         const Token t = peek();
         switch (t.kind) {
@@ -1363,6 +1813,7 @@ struct Parser {
             }
             case Tok::Word: {
                 ++pos;
+                if (big_operator_word(t.text) && peek().kind == Tok::Underscore) return parse_big_operator(t.text);
                 const std::string name = canonical_name(t.text);
                 const bool paren_only = !options.function_names.count(t.text) && needs_paren_name(name) && peek().kind != Tok::LParen;
                 if (!paren_only && (is_function_name(t.text) || is_function_name(name))) {
@@ -1425,7 +1876,13 @@ struct Parser {
                             return nullptr;
                         }
                     }
-                    ExprPtr c = make(Op::Call, args, fname);
+                    ExprPtr c;
+                    if (is_bound_name(fname) || fname == "doubleintegral" || fname == "tripleintegral") {
+                        c = bound_call_from(fname, args);
+                        if (!c) return nullptr;
+                    } else {
+                        c = make(Op::Call, args, fname);
+                    }
                     return power ? make(Op::Pow, { c, power }) : c;
                 }
                 if (name == "i") return make(Op::Imag);
@@ -1681,6 +2138,7 @@ std::string display_args(const std::vector<ExprPtr>& args) {
 std::string display_call(const ExprPtr& e) {
     const std::string& n = e->text;
     const std::vector<ExprPtr>& a = e->args;
+    if (is_bound_call(e)) return bound_math(e, [](const ExprPtr& x) { return display(x); });
     if (a.size() == 1) {
         if (n == "sqrt") return "sqrt(" + display(a[0]) + ")";
         if (n == "cbrt") return "root(3, " + display(a[0]) + ")";

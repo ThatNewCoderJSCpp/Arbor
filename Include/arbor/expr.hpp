@@ -53,6 +53,9 @@ bool depends_on(const ExprPtr& e, const std::string& name);
 void collect_names(const ExprPtr& e, std::set<std::string>& out);
 bool uses_imaginary(const ExprPtr& e);
 bool uses_branches(const ExprPtr& e, bool complex);
+bool is_bound_call(const ExprPtr& e);
+bool is_bound_name(const std::string& name);
+std::string bound_variable(const ExprPtr& e);
 
 struct FunctionInfo {
     std::string name;
@@ -75,6 +78,8 @@ using FunctionTable = std::map<std::string, UserFunction>;
 
 ExprPtr substitute(const ExprPtr& e, const std::map<std::string, ExprPtr>& with);
 ExprPtr inline_functions(const ExprPtr& e, const FunctionTable& functions, std::string& error, int depth = 0);
+ExprPtr expand_vectors(const ExprPtr& e, const FunctionTable& functions, std::string& error, int depth = 0);
+bool is_vector_function(const FunctionTable& functions, const std::string& name);
 ExprPtr simplify(const ExprPtr& e);
 ExprPtr tidy(const ExprPtr& e);
 ExprPtr derivative(const ExprPtr& e, const std::string& var);

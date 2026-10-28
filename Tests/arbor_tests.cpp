@@ -11,6 +11,7 @@
 #include <cmath>
 #include <functional>
 #include <map>
+#include <set>
 #include <iostream>
 #include <string>
 #include <vector>
@@ -623,6 +624,232 @@ void test_display() {
     check(show("bernoulli(n) + chebyshevT(x, 3)") == "B_{n} + T_{3}(x)", "display subscripted sequences and polynomials");
 }
 
+std::string readout_prefix(const std::vector<Readout>& rs, const std::string& prefix) {
+    for (const Readout& r : rs) {
+        if (r.label.rfind(prefix, 0) == 0) return r.value;
+    }
+    return "(missing)";
+}
+
+void test_sums_and_integrals() {
+    const double pi = 3.141592653589793;
+    check(near(eval_at("sum(n^2, n, 1, 10)", {}, {}), 385.0), "sum of squares");
+    check(near(eval_at("sum_{n=1}^{10} n^2", {}, {}), 385.0), "sum typed with bounds");
+    check(near(eval_at("sum_{n=1}^{inf} 1/n^2", {}, {}), pi * pi / 6.0, 1e-5), "infinite sum converges: " + std::to_string(eval_at("sum_{n=1}^{inf} 1/n^2", {}, {})));
+    check(near(eval_at("sum_{k=0}^{20} x^k/k!", { "x" }, { 1.0 }), std::exp(1.0), 1e-12), "sum uses x");
+    check(near(eval_at("sum_{n=1}^{x} n", { "x" }, { 4.7 }), 10.0), "upper bound rounds down");
+    check(near(eval_at("prod_{k=1}^{5} k", {}, {}), 120.0), "product");
+    check(near(eval_at("prod(1 - 1/(4k^2), k, 1, inf)", {}, {}), 2.0 / pi, 1e-5), "Wallis product");
+    check(near(eval_at("integral(sin(t), t, 0, pi)", {}, {}), 2.0, 1e-12), "integral of sin");
+    check(near(eval_at("int_{0}^{x} cos(t) dt", { "x" }, { 1.0 }), std::sin(1.0), 1e-12), "integral typed with dt");
+    check(near(eval_at("int_0^1 t^2 dt", {}, {}), 1.0 / 3.0, 1e-12), "integral with bare bounds");
+    check(near(eval_at("int_{0}^{x}{sin(t)}/{t dt}", { "x" }, { 2.0 }), 1.6054129768026948, 1e-10), "dt left in the denominator the math box builds: " + std::to_string(eval_at("int_{0}^{x}{sin(t)}/{t dt}", { "x" }, { 2.0 })));
+    check(near(eval_at("int_{1}^{2} 1/(t dt) + 1", {}, {}), std::log(2.0) + 1.0, 1e-12), "dt inside parentheses ends the integral");
+    check(near(eval_at("integral(e^(-t^2), t, -inf, inf)", {}, {}), std::sqrt(pi), 1e-9), "Gaussian over the whole line");
+    check(near(eval_at("int_{0}^{1} int_{0}^{x} x y dy dx", {}, {}), 1.0 / 8.0, 1e-10), "nested integrals");
+    check(near(eval_at("doubleintegral(x y, x, 0, 1, y, 0, x)", {}, {}), 1.0 / 8.0, 1e-10), "double integral");
+    check(near(eval_at("doubleintegral(x y, y, 0, x, x, 0, 1)", {}, {}), 1.0 / 8.0, 1e-10), "double integral orders itself by its bounds");
+    check(near(eval_at("tripleintegral(1, x, 0, 1, y, 0, 1 - x, z, 0, 1 - x - y)", {}, {}), 1.0 / 6.0, 1e-10), "triple integral of a tetrahedron");
+    check(near(eval_at("integral(t, t, 0, 1)", { "t" }, { 5.0 }), 0.5, 1e-12), "the bound variable shadows a variable of the same name");
+    check(near(eval_at("maximum(sin(t), t, 0, 3)", {}, {}), 1.0, 1e-10), "maximum");
+    check(near(eval_at("argmax(sin(t), t, 0, 3)", {}, {}), pi / 2.0, 1e-6), "argmax");
+    check(near(eval_at("minimum(t^2 - 2t, t, -5, 5)", {}, {}), -1.0, 1e-10), "minimum");
+    check(near(eval_at("integral(sin(t), t, 0, pi)", {}, {}, NumberType::Float), 2.0, 1e-12), "integral with a fizmo number type");
+    {
+        ParseOptions o;
+        o.known_names = { "x" };
+        const ParseResult r = parse_expression("sum_{n=1}^{10} a n", o);
+        std::set<std::string> names;
+        if (r.ok) collect_names(r.statement.lhs, names);
+        check(r.ok && names.count("a") == 1 && names.count("n") == 0, "a bound variable doesn't ask for a slider");
+        const ParseResult q = parse_expression("int_{0}^{x} t^2 dt", o);
+        const ExprPtr dq = q.ok ? derivative(q.statement.lhs, "x") : nullptr;
+        check(dq && to_string(simplify(dq)) == "x^2", "d/dx of an integral up to x: " + (dq ? to_string(simplify(dq)) : std::string("none")));
+        const ParseResult bad = parse_expression("int_{0}^{1} t^2", o);
+        check(!bad.ok, "an integral without dt says so");
+    }
+    {
+        auto show = [](const std::string& text) {
+            const ParseResult r = parse_statement_as_typed(text);
+            return r.ok ? display_mathtext(r.statement) : std::string("error");
+        };
+        check(show("sum_{n=1}^{10} n^2") == "Sum(n, 1, 10, n^{2})", "sum displays as a sigma: " + show("sum_{n=1}^{10} n^2"));
+        check(show("int_{0}^{x} sin(t) dt") == "defint(0, x, sin(t), t)", "integral displays with its sign: " + show("int_{0}^{x} sin(t) dt"));
+    }
+    const auto fr = item_readouts("function", "y = int_{0}^{x} cos(t) dt", {}, {}, Space::Plane);
+    check(readout_prefix(fr, "f(") != "(missing)", "a function defined by an integral graphs");
+}
+
+void test_extrema_asymptotes() {
+    const auto tanr = item_readouts("function", "y = tan(x)", {}, { { "asymptotes", true } }, Space::Plane);
+    const std::string va = readout_prefix(tanr, "vertical asymptote");
+    check(va.find("\xCF\x80/2") != std::string::npos, "tan x has asymptotes at odd multiples of pi/2: " + va);
+    const auto hyp = item_readouts("function", "y = (2x^2 + 1)/(x^2 - 1)", {}, {}, Space::Plane);
+    check(readout_prefix(hyp, "horizontal asymptote") == "y = 2 as x \xE2\x86\x92 \xC2\xB1\xE2\x88\x9E", "horizontal asymptote y = 2: " + readout_prefix(hyp, "horizontal asymptote"));
+    check(readout_prefix(hyp, "vertical asymptote") == "x = -1, x = 1", "vertical asymptotes at x = -1 and 1: " + readout_prefix(hyp, "vertical asymptote"));
+    const auto slant = item_readouts("function", "y = (x^2 + 1)/x", {}, {}, Space::Plane);
+    check(readout_prefix(slant, "slant asymptote") == "y = x as x \xE2\x86\x92 \xC2\xB1\xE2\x88\x9E", "slant asymptote y = x: " + readout_prefix(slant, "slant asymptote"));
+    const auto wave = item_readouts("function", "y = sin(x)", {}, {}, Space::Plane);
+    check(readout_prefix(wave, "horizontal asymptote") == "(missing)" && readout_prefix(wave, "slant asymptote") == "(missing)", "sin x has no asymptote at the ends");
+    const auto wobble = item_readouts("function", "y = x + sin(x)", {}, {}, Space::Plane);
+    check(readout_prefix(wobble, "slant asymptote") == "(missing)", "x + sin x has no slant asymptote");
+    const auto lg = item_readouts("function", "y = ln(x)", {}, {}, Space::Plane);
+    check(readout_prefix(lg, "vertical asymptote") == "x = 0", "ln x has x = 0: " + readout_prefix(lg, "vertical asymptote"));
+    const auto fl = item_readouts("function", "y = floor(x)", {}, {}, Space::Plane);
+    check(readout_prefix(fl, "vertical asymptote") == "(missing)", "a jump isn't an asymptote");
+    const auto ex = item_readouts("function", "y = x^3 - 3x", {}, { { "extrema", true } }, Space::Plane);
+    check(readout(ex, "local maxima") == "(-1, 2)", "local max of x^3 - 3x: " + readout(ex, "local maxima"));
+    check(readout(ex, "local minima") == "(1, -2)", "local min of x^3 - 3x: " + readout(ex, "local minima"));
+    const auto lim = item_readouts("function", "y = x^3 - 3x", { { "xmin", "-2" }, { "xmax", "3" } }, { { "extrema", true } }, Space::Plane);
+    check(readout(lim, "absolute max on [-2, 3]") == "y = 18 at (3, 18)", "absolute max at the end of the domain: " + readout(lim, "absolute max on [-2, 3]"));
+    check(readout(lim, "absolute min on [-2, 3]").find("y = -2 at (") == 0, "absolute min: " + readout(lim, "absolute min on [-2, 3]"));
+    const auto inv = item_readouts("function", "y = 1/x^2", {}, { { "extrema", true } }, Space::Plane);
+    check(readout(inv, "local maxima") == "none in view", "no fake maximum at a pole: " + readout(inv, "local maxima"));
+}
+
+void test_steep_curves() {
+    Graph g;
+    g.space = Space::Plane;
+    Item it;
+    it.id = "item-1";
+    it.kind = "function";
+    it.fields = { { "eq", "y = zeta(x)" } };
+    g.items.push_back(it);
+    g.view2.cx = -30.0;
+    g.view2.cy = 0.0;
+    g.view2.scale = 30.0;
+    BuildRequest req;
+    req.graph = g;
+    req.width = 600;
+    req.height = 400;
+    BuildControl control;
+    Scene scene = build_scene(req, control, NumberType::Hardware);
+    std::size_t crossings = 0;
+    for (const Stroke2& st : scene.s2.strokes) {
+        for (std::size_t i = 1; i < st.pts.size(); ++i) {
+            const Vec2 p = st.pts[i - 1];
+            const Vec2 q = st.pts[i];
+            if (finite(p) && finite(q) && p.x < -26.0 && ((p.y < 0) != (q.y < 0))) ++crossings;
+        }
+    }
+    check(crossings >= 4, "zeta keeps crossing zero below x = -26: " + std::to_string(crossings));
+    {
+        Graph far = g;
+        far.view2.cx = -60.0;
+        far.view2.scale = 15.0;
+        BuildRequest r2;
+        r2.graph = far;
+        r2.width = 600;
+        r2.height = 400;
+        Scene s2 = build_scene(r2, control, NumberType::Hardware);
+        std::size_t deep = 0;
+        for (const Stroke2& st : s2.s2.strokes) {
+            for (std::size_t i = 1; i < st.pts.size(); ++i) {
+                const Vec2 p = st.pts[i - 1];
+                const Vec2 q = st.pts[i];
+                if (finite(p) && finite(q) && p.x < -50.0 && ((p.y < 0) != (q.y < 0))) ++deep;
+            }
+        }
+        check(deep >= 8, "zeta keeps going below x = -50: " + std::to_string(deep));
+        check(s2.status.empty() || readout_prefix(s2.status[0].readouts, "vertical asymptote") == "(missing)", "zeta's steep zeros aren't asymptotes");
+    }
+    for (const char* eq : { "y = tan(x)", "y = 1/x", "y = 1/(x - 1)^3", "y = 1e6 sign(x)" }) {
+        Graph tg;
+        tg.space = Space::Plane;
+        Item ti;
+        ti.id = "item-1";
+        ti.kind = "function";
+        ti.fields = { { "eq", eq } };
+        tg.items.push_back(ti);
+        tg.view2.scale = 30.0;
+        BuildRequest tr;
+        tr.graph = tg;
+        tr.width = 600;
+        tr.height = 400;
+        Scene ts = build_scene(tr, control, NumberType::Hardware);
+        std::size_t joined = 0;
+        for (const Stroke2& st : ts.s2.strokes) {
+            for (std::size_t i = 1; i < st.pts.size(); ++i) {
+                const Vec2 p = st.pts[i - 1];
+                const Vec2 q = st.pts[i];
+                if (finite(p) && finite(q) && ((p.y > 7 && q.y < -7) || (p.y < -7 && q.y > 7))) ++joined;
+            }
+        }
+        check(joined == 0, std::string("no line joins across a pole or a jump: ") + eq);
+    }
+    const auto z = item_readouts("function", "y = zeta(x)", {}, {}, Space::Plane);
+    check(readout_prefix(z, "horizontal asymptote") == "y = 1 as x \xE2\x86\x92 \xE2\x88\x9E", "zeta tends to 1 only on the right: " + readout_prefix(z, "horizontal asymptote"));
+}
+
+std::vector<ItemStatus> defs_status(Space space, const std::vector<std::map<std::string, std::string>>& defs, const std::string& kind, const std::string& eq, std::size_t* strokes = nullptr, std::size_t* dots = nullptr) {
+    Graph g;
+    g.space = space;
+    int n = 0;
+    for (const auto& f : defs) {
+        Item it;
+        it.id = "item-" + std::to_string(++n);
+        it.kind = "define";
+        it.fields = f;
+        g.items.push_back(it);
+    }
+    if (!kind.empty()) {
+        Item it;
+        it.id = "item-" + std::to_string(++n);
+        it.kind = kind;
+        it.fields = { { "eq", eq } };
+        g.items.push_back(it);
+    }
+    BuildRequest req;
+    req.graph = g;
+    req.width = 600;
+    req.height = 400;
+    BuildControl control;
+    Scene s = build_scene(req, control, NumberType::Hardware);
+    if (strokes) *strokes = s.s2.strokes.size();
+    if (dots) *dots = s.s2.dots.size();
+    return s.status;
+}
+
+void test_definitions() {
+    {
+        const auto st = defs_status(Space::Plane, { { { "eq", "r(t) = <cos(t), sin(t)>" } } }, "parametric", "2r(t) + <1, 0>");
+        check(st.size() == 2 && st[1].error.empty() && st[1].mathtext.find("2*cos(t) + 1") != std::string::npos, "vector-valued definitions work in a parametric curve: " + (st.size() == 2 ? st[1].error + st[1].mathtext : std::string()));
+        check(st.size() == 2 && readout(st[0].readouts, "kind") == "a vector-valued function of t with 2 parts", "a vector-valued definition says what it is");
+    }
+    {
+        const auto st = defs_status(Space::Plane, { { { "eq", "r(t) = <cos(t), sin(t)>" } } }, "function", "y = r(x).y + |r(x)|");
+        check(st.size() == 2 && st[1].error.empty() && st[1].mathtext.rfind("y = sin(x) + sqrt(", 0) == 0, "parts and lengths of vectors: " + (st.size() == 2 ? st[1].error + st[1].mathtext : std::string()));
+    }
+    {
+        const auto st = defs_status(Space::Plane, { { { "eq", "F(x, y) = <-y, x>" } }, { { "eq", "G(x, y) = F(x, y) + <1, 0>" } } }, "vector_field", "G(x, y)");
+        check(st.size() == 3 && st[2].error.empty(), "a vector field from a definition built on another: " + (st.size() == 3 ? st[2].error : std::string()));
+    }
+    {
+        const auto st = defs_status(Space::Plane, { { { "eq", "p = <1, 2>" } }, { { "eq", "q = <3, 4>" } } }, "function", "y = dot(p, q) x + cross(p, q)");
+        check(st.size() == 3 && st[2].error.empty() && st[2].mathtext == "y = 11*x - 2", "dot and cross of vector values: " + (st.size() == 3 ? st[2].error + st[2].mathtext : std::string()));
+        const auto bad = defs_status(Space::Plane, { { { "eq", "p = <1, 2>" } } }, "function", "y = p + 1");
+        check(bad.size() == 2 && bad[1].error.find("vector") != std::string::npos, "adding a number to a vector is an error: " + (bad.size() == 2 ? bad[1].error : std::string()));
+    }
+    {
+        const auto st = defs_status(Space::Plane, { { { "eq", "h(z) = z^2 - 1" } } }, "domain", "h(z) / z");
+        check(st.size() == 2 && st[1].error.empty() && readout(st[0].readouts, "kind") == "a complex function of z", "complex definitions");
+    }
+    {
+        std::size_t strokes = 0;
+        std::size_t dots = 0;
+        auto st = defs_status(Space::Plane, { { { "eq", "f(x) = x^2" }, { "draw", "automatic" } } }, "", "", &strokes);
+        check(st[0].note == "drawn as a graph y = f(x)" && strokes == 1, "a definition can draw itself");
+        st = defs_status(Space::Plane, { { { "eq", "F(x, y) = <-y, x>" }, { "draw", "automatic" } } }, "", "");
+        check(st[0].note == "drawn as a vector field", "automatic picks a vector field for two inputs and two outputs");
+        st = defs_status(Space::Plane, { { { "eq", "p = <1, 2>" }, { "draw", "automatic" } } }, "", "", nullptr, &dots);
+        check(st[0].note == "drawn as a point" && dots == 1, "a vector value draws as a point");
+        st = defs_status(Space::Solid, { { { "eq", "S(u, v) = <u, v, u*v>" }, { "draw", "automatic" } } }, "", "");
+        check(st[0].note == "drawn as a parametric surface", "automatic picks a parametric surface in 3D: " + st[0].note);
+        st = defs_status(Space::Plane, { { { "eq", "f(x) = x^2" }, { "draw", "vector field" } } }, "", "");
+        check(st[0].note.find("needs 2 inputs and 2 outputs") != std::string::npos, "a mismatched way of drawing says why: " + st[0].note);
+    }
+}
+
 void test_png() {
     std::vector<std::uint8_t> px(16 * 8 * 4, 200);
     const std::vector<std::uint8_t> png = encode_png(px.data(), 16, 8);
@@ -650,6 +877,10 @@ int main() {
     test_theta_slider();
     test_brachistochrone_pde();
     test_pde_kinds();
+    test_sums_and_integrals();
+    test_extrema_asymptotes();
+    test_steep_curves();
+    test_definitions();
     test_png();
     std::cout << g_passed << " passed, " << g_failed << " failed\n";
     return g_failed == 0 ? 0 : 1;

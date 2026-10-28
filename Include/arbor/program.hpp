@@ -51,7 +51,8 @@ enum class Code : std::uint8_t {
     Call1,
     Call2,
     Call3,
-    Call4
+    Call4,
+    Reduce
 };
 
 struct Instr {
@@ -65,7 +66,25 @@ struct Constant {
     std::string literal;
 };
 
+enum class ReduceKind : std::uint8_t {
+    Sum,
+    Prod,
+    Integral,
+    Max,
+    Min,
+    ArgMax,
+    ArgMin
+};
+
+struct Program;
+
+struct Reduction {
+    ReduceKind kind = ReduceKind::Sum;
+    std::shared_ptr<Program> body;
+};
+
 struct Program {
+    std::vector<Reduction> reductions;
     std::vector<Instr> code;
     std::vector<Constant> constants;
     std::vector<std::string> slots;

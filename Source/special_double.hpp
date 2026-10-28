@@ -132,6 +132,14 @@ inline cd zeta(cd s) {
 
 inline double zeta(double s) {
     if (s == 1.0) return std::numeric_limits<double>::infinity();
+    if (s < -60.0) {
+        if (std::fmod(-s, 2.0) == 0.0) return 0.0;
+        const double sn = std::sin(0.5 * k_pi * std::fmod(s, 4.0));
+        if (sn == 0.0) return 0.0;
+        const double log_mag = s * std::log(2.0) + (s - 1.0) * std::log(k_pi) + std::log(std::fabs(sn)) + std::lgamma(1.0 - s);
+        if (log_mag > 709.0) return sn > 0 ? std::numeric_limits<double>::infinity() : -std::numeric_limits<double>::infinity();
+        return (sn > 0 ? 1.0 : -1.0) * std::exp(log_mag);
+    }
     const cd r = zeta(cd(s, 0.0));
     return r.real();
 }

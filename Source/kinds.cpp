@@ -61,7 +61,7 @@ std::vector<KindInfo> build() {
     std::vector<KindInfo> k;
     k.push_back({ "function", "2d", "Function", "y = f(x)", "The graph of a function of x, with its derivative, tangent and normal lines and osculating circle.", Space::Plane,
         { eq("y = sin(x)", "y = f(x), or x = g(y)"), field("at", "x\xE2\x82\x80", "1", "point for tangent, normal and curvature") },
-        { option("derivative", "f\xE2\x80\xB2(x)"), option("second", "f\xE2\x80\xB3(x)"), option("tangent", "Tangent"), option("normal", "Normal"), option("circle", "Osculating circle"), option("area", "Shade area under") } });
+        { option("derivative", "f\xE2\x80\xB2(x)"), option("second", "f\xE2\x80\xB3(x)"), option("tangent", "Tangent"), option("normal", "Normal"), option("circle", "Osculating circle"), option("area", "Shade area under"), option("extrema", "Extrema", false, "Local maxima and minima as points, and the highest and lowest points of the part in view (or of the domain you set)"), option("asymptotes", "Asymptotes", false, "Draw the vertical, horizontal and slant asymptotes, dashed (they're listed below either way)") } });
     k.push_back({ "implicit", "2d", "Implicit curve", "f(x, y) = g(x, y)", "Curves like x\xC2\xB2 + y\xC2\xB2 = 4 or f(x, y) = n, and regions from inequalities such as x\xC2\xB2 + y\xC2\xB2 < 4.", Space::Plane,
         { eq("x^2 + y^2 = 4", "f(x, y) = g(x, y), = n, or < > \xE2\x89\xA4 \xE2\x89\xA5") },
         { option("gradient", "Gradient arrows"), option("fill", "Shade where f < g", false) } });
@@ -169,7 +169,8 @@ std::vector<KindInfo> build() {
         { option("jacobian", "Color by |J|", true) } });
 
     k.push_back({ "define", "", "Definition", "f(x) = \xE2\x80\xA6 or a = \xE2\x80\xA6", "Define a function or a number to use in other items. Numbers become sliders.", Space::Plane,
-        { eq("a = 1", "f(x) = ... or a = 2") }, {} });
+        { eq("a = 1", "f(x) = ..., f(x, y) = ..., r(t) = \xE2\x9F\xA8...\xE2\x9F\xA9, f(z) = ... or a = 2"),
+          choice("draw", "draw", { "no", "automatic", "graph y = f(x)", "parametric curve", "contour map", "vector field", "complex color map", "point", "surface z = f(x, y)", "space curve", "parametric surface", "vector field in space", "level surface f = 0" }, "no", "Also draw the definition: automatic picks from its inputs and outputs and the graph (2D or 3D)") }, {} });
 
     k.push_back({ "piecewise", "misc", "Piecewise function", "y = a if c, else b", "A function that follows one formula where the condition holds and another where it does not. Leave the false box empty to draw only where the condition holds.", Space::Plane,
         { eq("x < 0", "condition, e.g. x < 0, 0 \xE2\x89\xA4 x < 2, x mod 2 = 0 and x > 1"), wide("then", "if true", "x^2"), wide("else", "if false", "sqrt(x)") },

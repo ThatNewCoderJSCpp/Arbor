@@ -724,6 +724,32 @@ void render2d(const Scene& scene, const RenderOptions& o, Image& img) {
         const Vec2 p = m(t.at);
         if (finite(p)) draw_text(img, p.x, p.y, t.text, 11.0 * ui, t.color, 0);
     }
+    for (const Dot2& d : o.marks) {
+        const Vec2 p = m(d.at);
+        if (!finite(p)) continue;
+        fill_circle(img, p, (d.radius + 2.5) * ui, with_alpha(o.theme.background, 0.95));
+        fill_circle(img, p, d.radius * ui, d.color, false, 2.0 * ui);
+        if (d.label.empty()) continue;
+        const double size = 12.0 * ui;
+        const double w = text_width(d.label, size);
+        const double pad = 5.0 * ui;
+        double x0 = p.x + (d.radius + 6) * ui;
+        double y0 = p.y - (d.radius + 6) * ui - size - 2 * pad;
+        if (x0 + w + 2 * pad > img.w - 2) x0 = p.x - (d.radius + 6) * ui - w - 2 * pad;
+        if (y0 < 2) y0 = p.y + (d.radius + 6) * ui;
+        fill_rect(img, static_cast<int>(x0), static_cast<int>(y0), static_cast<int>(x0 + w + 2 * pad), static_cast<int>(y0 + size + 2 * pad), with_alpha(o.theme.background, 0.92));
+        StrokeLayer border(img);
+        const Vec2 c0{ x0, y0 };
+        const Vec2 c1{ x0 + w + 2 * pad, y0 };
+        const Vec2 c2{ x0 + w + 2 * pad, y0 + size + 2 * pad };
+        const Vec2 c3{ x0, y0 + size + 2 * pad };
+        border.segment(c0, c1, 1.0 * ui, d.color, d.color);
+        border.segment(c1, c2, 1.0 * ui, d.color, d.color);
+        border.segment(c2, c3, 1.0 * ui, d.color, d.color);
+        border.segment(c3, c0, 1.0 * ui, d.color, d.color);
+        border.flush();
+        draw_text(img, x0 + pad, y0 + pad + size * 0.85, d.label, size, o.theme.text, -1);
+    }
     if (s.clipped) {
         const double fx0 = std::max(-1.0, std::min(img.w + 1.0, m.sx(std::max(s.clip_xmin, m.box.xmin - 1.0))));
         const double fx1 = std::max(-1.0, std::min(img.w + 1.0, m.sx(std::min(s.clip_xmax, m.box.xmax + 1.0))));

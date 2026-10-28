@@ -4,8 +4,10 @@
 #include "arbor/program.hpp"
 #include "special_double.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <complex>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -339,6 +341,10 @@ struct RealOps {
         return N::from_double(c.value);
     }
     static V imag() { return N::nan(); }
+    static V undefined() { return N::nan(); }
+    static V from_double(double v) { return N::from_double(v); }
+    static double real_of(const V& v) { return N::to_double(v); }
+    static double mag(const V& v) { return std::fabs(N::to_double(v)); }
     static V add(const V& a, const V& b) { return N::add(a, b); }
     static V sub(const V& a, const V& b) { return N::sub(a, b); }
     static V mul(const V& a, const V& b) { return N::mul(a, b); }
@@ -366,6 +372,10 @@ struct ComplexOps {
     static V constant(const Constant& c) { return real(RealOps<N>::constant(c)); }
     static V imag() { return V{ N::zero(), N::one() }; }
     static V nan() { return V{ N::nan(), N::nan() }; }
+    static V undefined() { return nan(); }
+    static V from_double(double v) { return real(N::from_double(v)); }
+    static double real_of(const V& v) { return N::to_double(v.re); }
+    static double mag(const V& v) { return std::hypot(N::to_double(v.re), N::to_double(v.im)); }
     static V add(const V& a, const V& b) { return V{ N::add(a.re, b.re), N::add(a.im, b.im) }; }
     static V sub(const V& a, const V& b) { return V{ N::sub(a.re, b.re), N::sub(a.im, b.im) }; }
     static V mul(const V& a, const V& b) {
@@ -674,6 +684,11 @@ public:
     void prepare(const Program& p) {
         m_consts.clear();
         for (const Constant& c : p.constants) m_consts.push_back(Ops::constant(c));
+        m_subs.clear();
+        for (const Reduction& r : p.reductions) {
+            m_subs.push_back(std::make_unique<Machine>());
+            m_subs.back()->prepare(*r.body);
+        }
     }
 
     void run(const Program& p, std::size_t n, const std::vector<const V*>& inputs, V* out) {
@@ -746,6 +761,15 @@ public:
                     sp -= 3;
                     break;
                 }
+                case Code::Reduce: {
+                    V* lo = m_stack[sp - 2].data();
+                    const V* hi = m_stack[sp - 1].data();
+                    const Reduction& r = p.reductions[ins.arg];
+                    Machine& sub = *m_subs[ins.arg];
+                    for (std::size_t i = 0; i < n; ++i) lo[i] = reduce(r, sub, inputs, i, lo[i], hi[i]);
+                    --sp;
+                    break;
+                }
             }
         }
         const V* r = m_stack[0].data();
@@ -753,6 +777,238 @@ public:
     }
 
 private:
+    void eval_body(const Reduction& r, Machine& sub, const std::vector<const V*>& inputs, std::size_t at, const std::vector<double>& ts, std::vector<V>& out) {
+        const std::size_t k = inputs.size();
+        const std::size_t m = ts.size();
+        std::vector<std::vector<V>> in(k + 1);
+        std::vector<const V*> ptrs(k + 1);
+        for (std::size_t s = 0; s < k; ++s) {
+            in[s].assign(m, inputs[s][at]);
+            ptrs[s] = in[s].data();
+        }
+        in[k].resize(m);
+        for (std::size_t j = 0; j < m; ++j) in[k][j] = Ops::from_double(ts[j]);
+        ptrs[k] = in[k].data();
+        out.resize(m);
+        sub.run(*r.body, m, ptrs, out.data());
+    }
+
+    V reduce(const Reduction& r, Machine& sub, const std::vector<const V*>& inputs, std::size_t at, const V& lo_v, const V& hi_v) {
+        const double lo = Ops::real_of(lo_v);
+        const double hi = Ops::real_of(hi_v);
+        if (std::isnan(lo) || std::isnan(hi)) return Ops::undefined();
+        switch (r.kind) {
+            case ReduceKind::Sum:
+            case ReduceKind::Prod: return series(r, sub, inputs, at, lo, hi);
+            case ReduceKind::Integral: return integrate(r, sub, inputs, at, lo, hi);
+            default: return extremum(r, sub, inputs, at, lo, hi);
+        }
+    }
+
+    V series(const Reduction& r, Machine& sub, const std::vector<const V*>& inputs, std::size_t at, double lo, double hi) {
+        const bool product = r.kind == ReduceKind::Prod;
+        V total = Ops::from_double(product ? 1.0 : 0.0);
+        if (std::isinf(lo)) return Ops::undefined();
+        const double start = std::ceil(lo - 1e-9);
+        const bool endless = std::isinf(hi) && hi > 0;
+        const double stop = endless ? start + 1048575.0 : std::floor(hi + 1e-9);
+        if (stop < start) return total;
+        if (stop - start > 2e7) return Ops::undefined();
+        std::vector<double> ts;
+        std::vector<V> vals;
+        double next = start;
+        int quiet = 0;
+        std::size_t batch = 64;
+        while (next <= stop) {
+            const double last = std::min(stop, next + static_cast<double>(batch) - 1.0);
+            ts.clear();
+            for (double t = next; t <= last; t += 1.0) ts.push_back(t);
+            eval_body(r, sub, inputs, at, ts, vals);
+            V part = Ops::from_double(product ? 1.0 : 0.0);
+            for (const V& v : vals) part = product ? Ops::mul(part, v) : Ops::add(part, v);
+            if (!std::isfinite(Ops::mag(part))) return Ops::undefined();
+            total = product ? Ops::mul(total, part) : Ops::add(total, part);
+            next = last + 1.0;
+            if (endless) {
+                const double change = product ? Ops::mag(Ops::sub(part, Ops::from_double(1.0))) : Ops::mag(part);
+                const double size = Ops::mag(total);
+                if (change <= 1e-17 * size || (product && size == 0.0) || (!product && change == 0.0 && size == 0.0)) {
+                    if (++quiet >= 2) return total;
+                } else {
+                    quiet = 0;
+                }
+                if (next > stop) return change <= 1e-5 * size ? total : Ops::undefined();
+                batch = std::min<std::size_t>(batch * 2, 16384);
+            } else {
+                batch = 4096;
+            }
+        }
+        return total;
+    }
+
+    V integrate(const Reduction& r, Machine& sub, const std::vector<const V*>& inputs, std::size_t at, double lo, double hi) {
+        if (lo == hi) return Ops::from_double(0.0);
+        double sign = 1.0;
+        if (lo > hi) {
+            std::swap(lo, hi);
+            sign = -1.0;
+        }
+        static const double xk[8] = { 0.991455371120812639206854697526329, 0.949107912342758524526189684047851, 0.864864423359769072789712788640926, 0.741531185599394439863864773280788, 0.586087235467691130294144845693013, 0.405845151377397166906606412076961, 0.207784955007898467600689403773245, 0.0 };
+        static const double wk[8] = { 0.022935322010529224963732008058970, 0.063092092629978553290700663189204, 0.104790010322250183839876322541518, 0.140653259715525918745189590510238, 0.169004726639267902826583426598550, 0.190350578064785409913256402421014, 0.204432940075298892414161999234649, 0.209482141084727828012999174891714 };
+        static const double wg[4] = { 0.129484966168869693270611432679082, 0.279705391489276667901467771423780, 0.381830050505118944950369775488975, 0.417959183673469387755102040816327 };
+        const bool lo_inf = std::isinf(lo);
+        const bool hi_inf = std::isinf(hi);
+        double u0 = lo;
+        double u1 = hi;
+        if (lo_inf && hi_inf) {
+            u0 = -1.0;
+            u1 = 1.0;
+        } else if (hi_inf || lo_inf) {
+            u0 = 0.0;
+            u1 = 1.0;
+        }
+        auto map = [&](double u, double& jac) {
+            if (lo_inf && hi_inf) {
+                const double q = 1.0 - u * u;
+                jac = (1.0 + u * u) / (q * q);
+                return u / q;
+            }
+            if (hi_inf) {
+                jac = 1.0 / ((1.0 - u) * (1.0 - u));
+                return lo + u / (1.0 - u);
+            }
+            if (lo_inf) {
+                jac = 1.0 / ((1.0 - u) * (1.0 - u));
+                return hi - u / (1.0 - u);
+            }
+            jac = 1.0;
+            return u;
+        };
+        struct Piece {
+            double a;
+            double b;
+            V value;
+            double err;
+            bool done;
+        };
+        std::vector<Piece> pieces;
+        const int first = (lo_inf || hi_inf) ? 8 : 4;
+        for (int k = 0; k < first; ++k) pieces.push_back(Piece{ u0 + (u1 - u0) * k / first, u0 + (u1 - u0) * (k + 1) / first, Ops::from_double(0.0), 0.0, false });
+        std::vector<double> ts;
+        std::vector<double> jacs;
+        std::vector<V> vals;
+        for (int round = 0; round < 14; ++round) {
+            std::vector<std::size_t> todo;
+            for (std::size_t i = 0; i < pieces.size(); ++i) {
+                if (!pieces[i].done) todo.push_back(i);
+            }
+            if (todo.empty()) break;
+            ts.clear();
+            jacs.clear();
+            for (std::size_t i : todo) {
+                const double c = 0.5 * (pieces[i].a + pieces[i].b);
+                const double h = 0.5 * (pieces[i].b - pieces[i].a);
+                for (int j = 0; j < 15; ++j) {
+                    const double x = j < 7 ? -xk[j] : j == 7 ? 0.0 : xk[14 - j];
+                    double jac = 1.0;
+                    const double t = map(c + h * x, jac);
+                    ts.push_back(t);
+                    jacs.push_back(jac * h);
+                }
+            }
+            eval_body(r, sub, inputs, at, ts, vals);
+            for (std::size_t q = 0; q < todo.size(); ++q) {
+                Piece& pc = pieces[todo[q]];
+                V kron = Ops::from_double(0.0);
+                V gauss = Ops::from_double(0.0);
+                for (int j = 0; j < 15; ++j) {
+                    const std::size_t idx = q * 15 + static_cast<std::size_t>(j);
+                    const double jac = jacs[idx];
+                    const V f = (jac == 0.0 || !std::isfinite(jac)) ? Ops::from_double(0.0) : Ops::mul(vals[idx], Ops::from_double(jac));
+                    const int node = j < 8 ? j : 14 - j;
+                    kron = Ops::add(kron, Ops::mul(f, Ops::from_double(wk[node])));
+                    if (node % 2 == 1) gauss = Ops::add(gauss, Ops::mul(f, Ops::from_double(wg[node / 2])));
+                }
+                pc.value = kron;
+                pc.err = Ops::mag(Ops::sub(kron, gauss));
+                if (!std::isfinite(pc.err)) return Ops::undefined();
+            }
+            V total = Ops::from_double(0.0);
+            double err = 0.0;
+            for (const Piece& pc : pieces) {
+                total = Ops::add(total, pc.value);
+                err += pc.err;
+            }
+            const double size = Ops::mag(total);
+            const double tol = std::max(1e-13 * size, 1e-15);
+            if (err <= tol) break;
+            if (round == 13 || pieces.size() > 4000) break;
+            std::vector<Piece> next;
+            const double span = u1 - u0;
+            for (const Piece& pc : pieces) {
+                const double share = tol * (pc.b - pc.a) / span;
+                if (pc.done || pc.err <= share) {
+                    Piece kept = pc;
+                    kept.done = true;
+                    next.push_back(kept);
+                } else {
+                    const double m = 0.5 * (pc.a + pc.b);
+                    next.push_back(Piece{ pc.a, m, Ops::from_double(0.0), 0.0, false });
+                    next.push_back(Piece{ m, pc.b, Ops::from_double(0.0), 0.0, false });
+                }
+            }
+            pieces.swap(next);
+        }
+        V total = Ops::from_double(0.0);
+        for (const Piece& pc : pieces) total = Ops::add(total, pc.value);
+        return sign < 0 ? Ops::neg(total) : total;
+    }
+
+    V extremum(const Reduction& r, Machine& sub, const std::vector<const V*>& inputs, std::size_t at, double lo, double hi) {
+        if (lo > hi) std::swap(lo, hi);
+        if (!std::isfinite(lo) || !std::isfinite(hi)) return Ops::undefined();
+        const bool want_max = r.kind == ReduceKind::Max || r.kind == ReduceKind::ArgMax;
+        const bool want_arg = r.kind == ReduceKind::ArgMax || r.kind == ReduceKind::ArgMin;
+        std::vector<double> ts;
+        std::vector<V> vals;
+        double a = lo;
+        double b = hi;
+        double best_t = std::nan("");
+        V best_v = Ops::undefined();
+        double best_key = 0.0;
+        int count = 257;
+        for (int round = 0; round < 12; ++round) {
+            ts.clear();
+            for (int j = 0; j < count; ++j) ts.push_back(a + (b - a) * j / (count - 1));
+            if (round == 0) {
+                ts.push_back(lo);
+                ts.push_back(hi);
+            }
+            eval_body(r, sub, inputs, at, ts, vals);
+            std::size_t best_j = ts.size();
+            for (std::size_t j = 0; j < ts.size(); ++j) {
+                const double key = Ops::real_of(vals[j]);
+                if (std::isnan(key)) continue;
+                if (std::isnan(best_t) || (want_max ? key > best_key : key < best_key)) {
+                    best_key = key;
+                    best_t = ts[j];
+                    best_v = vals[j];
+                    best_j = j;
+                }
+            }
+            if (std::isnan(best_t)) return Ops::undefined();
+            if (best_j == ts.size() && round > 0) break;
+            const double step = (b - a) / (count - 1);
+            a = std::max(lo, best_t - step);
+            b = std::min(hi, best_t + step);
+            if (b - a <= 1e-15 * std::max(1.0, std::fabs(best_t))) break;
+            count = 33;
+        }
+        return want_arg ? Ops::from_double(best_t) : best_v;
+    }
+
+    std::vector<std::unique_ptr<Machine>> m_subs;
+
     template <class F>
     void binary(std::size_t& sp, std::size_t n, F f) {
         V* a = m_stack[sp - 2].data();

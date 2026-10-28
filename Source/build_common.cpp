@@ -85,7 +85,22 @@ ParseOptions parse_options(const Env& env, const std::vector<std::string>& vars)
 }
 
 ParseResult parse_field(const std::string& text, const Env& env, const std::vector<std::string>& vars) {
-    return parse_statement(text, parse_options(env, vars));
+    ParseResult r = parse_statement(text, parse_options(env, vars));
+    if (!r.ok) return r;
+    std::string err;
+    Statement& st = r.statement;
+    FunctionTable functions = env.functions;
+    for (const std::string& v : vars) functions.erase(v);
+    if (st.is_function_definition) {
+        for (const std::string& p : st.params) functions.erase(p);
+    }
+    if (!st.is_function_definition && !st.is_value_definition) st.lhs = expand_vectors(st.lhs, functions, err);
+    if (err.empty() && st.rhs) st.rhs = expand_vectors(st.rhs, functions, err);
+    if (!err.empty()) {
+        r.ok = false;
+        r.error = err;
+    }
+    return r;
 }
 
 ExprPtr prepare(const ExprPtr& e, Env& env, const std::vector<std::string>& vars, std::string& error) {
@@ -496,6 +511,140 @@ bool open_map(double t0, double t1, OpenMap& m, double eps) {
     return true;
 }
 
+bool clip_segment(const WorldBox2& e, Vec2 p, Vec2 q, double& t0, double& t1, int& k0, int& k1) {
+    t0 = 0.0;
+    t1 = 1.0;
+    k0 = -1;
+    k1 = -1;
+    const double dx = q.x - p.x;
+    const double dy = q.y - p.y;
+    const double ps[4] = { -dx, dx, -dy, dy };
+    const double qs[4] = { p.x - e.xmin, e.xmax - p.x, p.y - e.ymin, e.ymax - p.y };
+    for (int k = 0; k < 4; ++k) {
+        if (ps[k] == 0.0) {
+            if (qs[k] < 0.0) return false;
+            continue;
+        }
+        const double r = qs[k] / ps[k];
+        if (ps[k] < 0.0) {
+            if (r > t0) {
+                t0 = r;
+                k0 = k;
+            }
+        } else if (r < t1) {
+            t1 = r;
+            k1 = k;
+        }
+        if (t0 > t1) return false;
+    }
+    return true;
+}
+
+Vec2 clip_point(const WorldBox2& e, Vec2 p, Vec2 q, double t, int k) {
+    Vec2 r{ p.x + t * (q.x - p.x), p.y + t * (q.y - p.y) };
+    if (k == 0) r.x = e.xmin;
+    else if (k == 1) r.x = e.xmax;
+    else if (k == 2) r.y = e.ymin;
+    else if (k == 3) r.y = e.ymax;
+    return r;
+}
+
+void clip_polyline(const WorldBox2& box, std::vector<double>& ts, std::vector<Vec2>& pts) {
+    const double wx = box.xmax - box.xmin;
+    const double wy = box.ymax - box.ymin;
+    const WorldBox2 e{ box.xmin - wx, box.xmax + wx, box.ymin - wy, box.ymax + wy };
+    auto inside = [&](Vec2 p) { return p.x >= e.xmin && p.x <= e.xmax && p.y >= e.ymin && p.y <= e.ymax; };
+    bool any_out = false;
+    for (const Vec2& p : pts) {
+        if (finite(p) && !inside(p)) {
+            any_out = true;
+            break;
+        }
+    }
+    if (!any_out) return;
+    std::vector<double> ot;
+    std::vector<Vec2> op;
+    auto brk = [&]() {
+        if (!op.empty() && finite(op.back())) {
+            ot.push_back(k_nan);
+            op.push_back(Vec2{ k_nan, k_nan });
+        }
+    };
+    for (std::size_t i = 0; i < pts.size(); ++i) {
+        const Vec2 q = pts[i];
+        if (!finite(q)) {
+            brk();
+            continue;
+        }
+        if (i == 0 || !finite(pts[i - 1])) {
+            if (inside(q)) {
+                ot.push_back(ts[i]);
+                op.push_back(q);
+            }
+            continue;
+        }
+        const Vec2 p = pts[i - 1];
+        double a = 0.0;
+        double b = 1.0;
+        int ka = -1;
+        int kb = -1;
+        if (!clip_segment(e, p, q, a, b, ka, kb)) {
+            brk();
+            continue;
+        }
+        const double dt = ts[i] - ts[i - 1];
+        if (a > 0.0) {
+            brk();
+            ot.push_back(ts[i - 1] + a * dt);
+            op.push_back(clip_point(e, p, q, a, ka));
+        }
+        if (b < 1.0) {
+            ot.push_back(ts[i - 1] + b * dt);
+            op.push_back(clip_point(e, p, q, b, kb));
+            brk();
+        } else {
+            ot.push_back(ts[i]);
+            op.push_back(q);
+        }
+    }
+    ts.swap(ot);
+    pts.swap(op);
+}
+
+bool steep_but_continuous(const CurveSampler2& s, double ta, double tb, Vec2 pa, Vec2 pb) {
+    const double scale = s.height / (s.box.ymax - s.box.ymin);
+    double jump = std::fabs(pb.y - pa.y) * scale;
+    const double size0 = std::max(std::fabs(pa.y), std::fabs(pb.y));
+    int stuck = 0;
+    std::vector<double> one(1);
+    std::vector<Vec2> out;
+    const double noise = std::max(2.0, 1e-11 * size0 * scale);
+    for (int k = 0; k < 80; ++k) {
+        if (jump < noise) return true;
+        const double tm = 0.5 * (ta + tb);
+        if (tm <= ta || tm >= tb) return true;
+        one[0] = tm;
+        s.eval(one, out);
+        if (out.empty() || !finite(out[0])) return false;
+        const Vec2 pm = out[0];
+        const double left = std::fabs(pm.y - pa.y) * scale;
+        const double right = std::fabs(pb.y - pm.y) * scale;
+        const double next = std::max(left, right);
+        if (left >= right) {
+            tb = tm;
+            pb = pm;
+        } else {
+            ta = tm;
+            pa = pm;
+        }
+        if (std::max(std::fabs(pa.y), std::fabs(pb.y)) > 2.0 * size0 + 1e-300) return false;
+        stuck = next > 0.85 * jump ? stuck + 1 : 0;
+        if (stuck >= 8) return false;
+        jump = next;
+    }
+    return true;
+}
+
 void sample_curve2(const CurveSampler2& s, double t0, double t1, std::vector<double>& ts, std::vector<Vec2>& pts) {
     OpenMap om;
     if (open_map(t0, t1, om)) {
@@ -564,11 +713,12 @@ void sample_curve2(const CurveSampler2& s, double t0, double t1, std::vector<dou
     }
     std::vector<double> ot;
     std::vector<Vec2> op;
+    int checked = 0;
     for (std::size_t i = 0; i < ts.size(); ++i) {
         if (i > 0 && finite(pts[i]) && finite(pts[i - 1])) {
             const Vec2 sa = to_px(s.box, s.width, s.height, pts[i - 1]);
             const Vec2 sb = to_px(s.box, s.width, s.height, pts[i]);
-            if (std::fabs(sb.y - sa.y) > s.height * 0.6 && !far_out(s.box, pts[i - 1], pts[i])) {
+            if (std::fabs(sb.y - sa.y) > s.height * 0.6 && !far_out(s.box, pts[i - 1], pts[i]) && (++checked > 4000 || !steep_but_continuous(s, ts[i - 1], ts[i], pts[i - 1], pts[i]))) {
                 ot.push_back(k_nan);
                 op.push_back(Vec2{ k_nan, k_nan });
             }
@@ -578,6 +728,7 @@ void sample_curve2(const CurveSampler2& s, double t0, double t1, std::vector<dou
     }
     ts.swap(ot);
     pts.swap(op);
+    clip_polyline(s.box, ts, pts);
 }
 
 void sample_curve3(const CurveSampler3& s, double t0, double t1, std::vector<double>& ts, std::vector<Vec3>& pts) {
