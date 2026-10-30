@@ -907,12 +907,8 @@ Vec3 Camera3::normalize(Vec3 p) const {
 }
 
 Vec3 Camera3::view(Vec3 n) const {
-    const double cy = std::cos(yaw), sy = std::sin(yaw);
-    const double cp = std::cos(pitch), sp = std::sin(pitch);
-    const double x1 = n.x * cy - n.y * sy;
-    const double y1 = n.x * sy + n.y * cy;
-    const double z1 = n.z;
-    return Vec3{ x1, z1 * cp + y1 * sp, y1 * cp - z1 * sp };
+    const fizmo::linalg::vector3d v = axes.orbit_view(fizmo::linalg::vector3d{ n.x, n.y, n.z }, yaw, pitch);
+    return Vec3{ v.x, v.y, -v.z };
 }
 
 bool Camera3::project(Vec3 world, double& sx, double& sy, double& depth) const {

@@ -5,6 +5,8 @@
 #include "scene.hpp"
 #include "vec.hpp"
 
+#include <fizmo/../axes.hpp>
+
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -51,6 +53,7 @@ struct Camera3 {
     double zmax = 5.0;
     int width = 800;
     int height = 600;
+    fizmo::Axes3D axes = fizmo::Axes3D::z_up();
 
     Vec3 normalize(Vec3 world) const;
     Vec3 view(Vec3 n) const;
