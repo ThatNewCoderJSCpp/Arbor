@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Arbor
+GenericName=Graphing Calculator
+Comment=Graph equations in 2D and 3D
+Exec=arbor
+Icon=arbor
+Terminal=false
+Categories=Education;Math;
